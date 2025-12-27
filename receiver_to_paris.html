@@ -2,62 +2,36 @@
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
-    <title>Console NANTES</title>
+    <title>Receiver PARIS</title>
     <style>
-        body { background: #111; color: white; font-family: sans-serif; text-align: center; padding: 20px; }
-        video { width: 80%; max-width: 720px; border: 2px solid #007bff; border-radius: 8px; background: black; }
-        .controls { margin-top: 20px; }
-        button { padding: 15px 30px; background: #e91111; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 18px; font-weight: bold; }
-        #status { color: #aaa; margin-top: 10px; }
+        body { margin: 0; background: black; overflow: hidden; }
+        video { width: 100vw; height: 100vh; object-fit: contain; }
     </style>
 </head>
 <body>
-    <h1>📍 CONSOLE NANTES</h1>
-    <video id="localVideo" autoplay playsinline muted></video>
-    
-    <div class="controls">
-        <button id="startBtn">🔴 ENVOYER LE FLUX VERS PARIS</button>
-        <p id="status">Statut : Prêt à émettre</p>
-    </div>
-
+    <video id="v" autoplay playsinline muted></video>
     <script>
         const sig = new WebSocket('wss://railway-webrtc-production.up.railway.app');
         const config = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
-        let localStream;
+        let pc;
 
-        // Capture HD 1080p
-        navigator.mediaDevices.getUserMedia({ 
-            video: { width: 1920, height: 1080 }, 
-            audio: true 
-        }).then(stream => {
-            localStream = stream;
-            document.getElementById('localVideo').srcObject = stream;
-        });
+        // S'identifie comme 'obs_paris'
+        sig.onopen = () => sig.send(JSON.stringify({ type: 'login', name: 'obs_paris' }));
 
-        sig.onopen = () => sig.send(JSON.stringify({ type: 'login', name: 'nantes' }));
-
-        document.getElementById('startBtn').onclick = async () => {
-            document.getElementById('status').innerText = "📡 Négociation avec Paris...";
-            const pc = new RTCPeerConnection(config);
-            
-            localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
-
-            pc.onicecandidate = e => {
-                if (e.candidate) sig.send(JSON.stringify({ type: 'candidate', target: 'obs_paris', candidate: e.candidate }));
-            };
-
-            const offer = await pc.createOffer();
-            await pc.setLocalDescription(offer);
-            sig.send(JSON.stringify({ type: 'offer', target: 'obs_paris', offer: offer, from: 'nantes' }));
-            
-            sig.onmessage = async (msg) => {
-                const data = JSON.parse(msg.data);
-                if (data.type === 'answer') {
-                    await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
-                    document.getElementById('status').innerText = "✅ FLUX TRANSMIS À PARIS (1080p)";
-                }
-                if (data.type === 'candidate') await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
-            };
+        sig.onmessage = async (msg) => {
+            const data = JSON.parse(msg.data);
+            if (data.type === 'offer' && data.from === 'nantes') {
+                pc = new RTCPeerConnection(config);
+                pc.onicecandidate = e => e.candidate && sig.send(JSON.stringify({ type: 'candidate', target: 'nantes', candidate: e.candidate }));
+                pc.ontrack = e => { document.getElementById('v').srcObject = e.streams[0]; };
+                
+                await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+                const ans = await pc.createAnswer();
+                await pc.setLocalDescription(ans);
+                sig.send(JSON.stringify({ type: 'answer', target: 'nantes', answer: ans }));
+            } else if (data.type === 'candidate' && pc) {
+                await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+            }
         };
     </script>
 </body>
