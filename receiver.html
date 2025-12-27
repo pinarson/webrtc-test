@@ -49,9 +49,21 @@
             }
         };
         pc.ontrack = (e) => {
-            status.innerText = "IMAGE REÇUE !";
-            document.getElementById('v').srcObject = e.streams[0];
-        };
+    status.innerText = "IMAGE REÇUE !";
+    const videoElement = document.getElementById('v');
+    
+    // On lie le flux
+    videoElement.srcObject = e.streams[0];
+    
+    // On force la lecture
+    videoElement.play().then(() => {
+        console.log("Lecture lancée avec succès");
+        status.style.display = 'none'; // Cache le texte si ça marche
+    }).catch(err => {
+        console.error("Erreur de lecture auto:", err);
+        status.innerText = "CLIQUEZ ICI POUR ACTIVER L'IMAGE";
+    });
+};
 
         await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
         const ans = await pc.createAnswer();
