@@ -1,17 +1,29 @@
-<title>Poste WebRTC</title>
-    <link rel="stylesheet" href="style.css"> </head>
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <title>WebRTC Control Room NANTES</title>
+    <link rel="stylesheet" href="style.css">
+</head>
 <body>
-    <h1 id="title">Poste : Chargement...</h1>
+    <h1 id="title">Poste : ...</h1>
     
     <div class="settings">
-        <label>Caméra :</label>
+        <label>Ma Source Vidéo :</label>
         <select id="videoSource"></select>
-        <button id="startCall">Appeler le correspondant</button>
+        <button id="startCall">LANCER LE DIRECT</button>
     </div>
 
     <div class="video-grid">
-        <video id="localVideo" autoplay playsinline muted></video>
-        <video id="remoteVideo" autoplay playsinline></video>
+        <div class="video-container">
+            <div class="label">MON ENVOI (LOCAL)</div>
+            <video id="localVideo" autoplay playsinline muted></video>
+        </div>
+
+        <div class="video-container">
+            <div class="label">RETOUR DISTANT (LIVE)</div>
+            <video id="remoteVideo" autoplay playsinline></video>
+        </div>
     </div>
 
     <script>
