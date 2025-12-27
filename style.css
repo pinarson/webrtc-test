@@ -67,3 +67,25 @@ button {
     border-radius: 5px;
     cursor: pointer;
 }
+
+/* Mode NDI : On cache tout sauf la vidéo distante */
+body.ndi-mode {
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    background-color: black;
+}
+
+body.ndi-mode #localVideo, 
+body.ndi-mode .settings, 
+body.ndi-mode h1,
+body.ndi-mode .label {
+    display: none !important;
+}
+
+body.ndi-mode #remoteVideo {
+    width: 100vw;
+    height: 100vh;
+    border: none;
+    object-fit: contain; /* Garde le ratio de l'image */
+}

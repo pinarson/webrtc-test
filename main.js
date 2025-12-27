@@ -1,3 +1,19 @@
+// Détection du mode NDI
+const urlParams = new URLSearchParams(window.location.search);
+if (urlParams.has('ndi')) {
+    document.body.classList.add('ndi-mode');
+}
+
+// Optionnel : Lancement automatique si mode NDI
+if (urlParams.has('ndi')) {
+    signaling.addEventListener('open', () => {
+        setTimeout(() => {
+            console.log("Auto-start NDI...");
+            document.getElementById('startCall').click();
+        }, 2000);
+    });
+}
+
 const videoSelect = document.querySelector('select#videoSource');
 const localVideo = document.getElementById('localVideo');
 const remoteVideo = document.getElementById('remoteVideo');
