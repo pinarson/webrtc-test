@@ -2,34 +2,61 @@
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
-    <title>WebRTC - PARIS</title>
-    <link rel="stylesheet" href="style.css">
+    <title>Console PARIS</title>
+    <style>
+        body { background: #111; color: white; font-family: sans-serif; text-align: center; padding: 20px; }
+        video { width: 80%; max-width: 720px; border: 2px solid #00d4ff; border-radius: 8px; background: black; }
+        .controls { margin-top: 20px; }
+        button { padding: 15px 30px; background: #00d4ff; color: #111; border: none; border-radius: 5px; cursor: pointer; font-size: 18px; font-weight: bold; }
+        #status { color: #aaa; margin-top: 10px; }
+    </style>
 </head>
 <body>
-    <h1 id="title">Poste : PARIS</h1>
+    <h1>📍 CONSOLE PARIS</h1>
+    <video id="localVideo" autoplay playsinline muted></video>
     
-    <div class="settings">
-        <label>Ma Source Vidéo :</label>
-        <select id="videoSource"></select>
-        <button id="startCall">LANCER LE DIRECT</button>
-    </div>
-
-    <div class="video-grid">
-        <div class="video-container" id="localContainer">
-            <div class="label">MON ENVOI (LOCAL)</div>
-            <video id="localVideo" autoplay playsinline muted></video>
-        </div>
-
-        <div class="video-container" id="remoteContainer">
-            <div class="label">RETOUR NANTES (LIVE)</div>
-            <video id="remoteVideo" autoplay playsinline></video>
-        </div>
+    <div class="controls">
+        <button id="startBtn">🔴 ENVOYER LE FLUX VERS NANTES</button>
+        <p id="status">Statut : Prêt à émettre</p>
     </div>
 
     <script>
-        const MY_ID = 'paris'; 
-        const TARGET_ID = 'nantes';
+        const sig = new WebSocket('wss://railway-webrtc-production.up.railway.app');
+        const config = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+        let localStream;
+
+        navigator.mediaDevices.getUserMedia({ 
+            video: { width: 1920, height: 1080 }, 
+            audio: true 
+        }).then(stream => {
+            localStream = stream;
+            document.getElementById('localVideo').srcObject = stream;
+        });
+
+        sig.onopen = () => sig.send(JSON.stringify({ type: 'login', name: 'paris' }));
+
+        document.getElementById('startBtn').onclick = async () => {
+            document.getElementById('status').innerText = "📡 Négociation avec Nantes...";
+            const pc = new RTCPeerConnection(config);
+            localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+
+            pc.onicecandidate = e => {
+                if (e.candidate) sig.send(JSON.stringify({ type: 'candidate', target: 'obs_nantes', candidate: e.candidate }));
+            };
+
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            sig.send(JSON.stringify({ type: 'offer', target: 'obs_nantes', offer: offer, from: 'paris' }));
+            
+            sig.onmessage = async (msg) => {
+                const data = JSON.parse(msg.data);
+                if (data.type === 'answer') {
+                    await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+                    document.getElementById('status').innerText = "✅ FLUX TRANSMIS À NANTES (1080p)";
+                }
+                if (data.type === 'candidate') await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+            };
+        };
     </script>
-    <script src="main.js"></script>
 </body>
 </html>
