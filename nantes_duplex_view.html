@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <title>Console NANTES - Régie</title>
+    <style>
+        body { background: #111; color: white; font-family: sans-serif; text-align: center; margin: 0; padding: 20px; }
+        .grid { display: flex; justify-content: center; gap: 20px; margin-top: 20px; }
+        .video-box { width: 45%; max-width: 600px; }
+        video { width: 100%; border: 2px solid #333; border-radius: 8px; background: black; aspect-ratio: 16/9; }
+        .live { border-color: #00d4ff; box-shadow: 0 0 15px rgba(0, 212, 255, 0.3); }
+        button { padding: 15px 30px; background: #e91111; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 18px; font-weight: bold; }
+        #status { color: #aaa; margin-top: 10px; font-size: 14px; }
+        p { margin: 5px 0; font-size: 12px; text-transform: uppercase; letter-spacing: 1px; }
+    </style>
+</head>
+<body>
+    <h1>📍 CONSOLE NANTES</h1>
+    
+    <div class="grid">
+        <div class="video-box">
+            <p>Ma Caméra (Sortie vers Paris)</p>
+            <video id="localVideo" autoplay playsinline muted></video>
+        </div>
+        <div class="video-box">
+            <p>Retour Paris (Entrée)</p>
+            <video id="remoteVideo" autoplay playsinline class="live"></video>
+        </div>
+    </div>
+
+    <div style="margin-top: 30px;">
+        <button id="startBtn">🔴 ÉTABLIR LE DUPLEX</button>
+        <p id="status">Statut : Prêt</p>
+    </div>
+
+    <script>
+        const sig = new WebSocket('wss://railway-webrtc-production.up.railway.app');
+        const config = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+        let localStream;
+        let pcOutgoing; // Pour envoyer à OBS Paris
+        let pcIncoming; // Pour recevoir de Paris
+
+        // 1. Init Caméra
+        navigator.mediaDevices.getUserMedia({ video: { width: 1920, height: 1080 }, audio: true })
+            .then(stream => {
+                localStream = stream;
+                document.getElementById('localVideo').srcObject = stream;
+            });
+
+        sig.onopen = () => sig.send(JSON.stringify({ type: 'login', name: 'nantes' }));
+
+        document.getElementById('startBtn').onclick = async () => {
+            document.getElementById('status').innerText = "📡 Négociation du Duplex...";
+            
+            // --- PARTIE ENVOI (Vers OBS Paris) ---
+            pcOutgoing = new RTCPeerConnection(config);
+            localStream.getTracks().forEach(track => pcOutgoing.addTrack(track, localStream));
+            pcOutgoing.onicecandidate = e => {
+                if (e.candidate) sig.send(JSON.stringify({ type: 'candidate', target: 'obs_paris', candidate: e.candidate }));
+            };
+            const offer = await pcOutgoing.createOffer();
+            await pcOutgoing.setLocalDescription(offer);
+            sig.send(JSON.stringify({ type: 'offer', target: 'obs_paris', offer: offer, from: 'nantes' }));
+        };
+
+        sig.onmessage = async (msg) => {
+            const data = JSON.parse(msg.data);
+
+            // Gestion de l'envoi vers OBS Paris (Answer)
+            if (data.type === 'answer' && data.from === 'obs_paris') {
+                await pcOutgoing.setRemoteDescription(new RTCSessionDescription(data.answer));
+                document.getElementById('status').innerText = "✅ EN DIRECT SUR OBS PARIS";
+            }
+
+            // GESTION DU RETOUR (Quand Paris t'appelle)
+            if (data.type === 'offer' && data.from === 'paris') {
+                pcIncoming = new RTCPeerConnection(config);
+                pcIncoming.onicecandidate = e => e.candidate && sig.send(JSON.stringify({ type: 'candidate', target: 'paris', candidate: e.candidate }));
+                pcIncoming.ontrack = e => { document.getElementById('remoteVideo').srcObject = e.streams[0]; };
+                
+                await pcIncoming.setRemoteDescription(new RTCSessionDescription(data.offer));
+                const ans = await pcIncoming.createAnswer();
+                await pcIncoming.setLocalDescription(ans);
+                sig.send(JSON.stringify({ type: 'answer', target: 'paris', answer: ans }));
+            }
+
+            // Candidats ICE
+            if (data.type === 'candidate') {
+                if (data.from === 'obs_paris' && pcOutgoing) await pcOutgoing.addIceCandidate(new RTCIceCandidate(data.candidate));
+                if (data.from === 'paris' && pcIncoming) await pcIncoming.addIceCandidate(new RTCIceCandidate(data.candidate));
+            }
+        };
+    </script>
+</body>
+</html>
