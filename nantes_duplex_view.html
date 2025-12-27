@@ -16,19 +16,16 @@
 </head>
 <body>
     <h1>📍 CONSOLE NANTES</h1>
-    
     <div class="grid">
         <div class="video-box">
             <div class="label">MA SORTIE (VERS OBS PARIS)</div>
             <video id="localVideo" autoplay playsinline muted></video>
         </div>
-        
         <div class="video-box">
             <div class="label">RETOUR DE PARIS</div>
             <video id="remoteVideo" autoplay playsinline class="live-border"></video>
         </div>
     </div>
-
     <div style="margin-top: 30px;">
         <button id="startBtn">🔴 LANCER LE DIRECT</button>
         <p id="status">Initialisation...</p>
@@ -37,12 +34,11 @@
     <script>
         const statusText = document.getElementById('status');
         const sig = new WebSocket('wss://railway-webrtc-production.up.railway.app');
-        const config = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+        const config = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' }] };
         
         let localStream;
-        let peerConnections = {}; // Pour stocker 'obs_paris' et 'paris' séparément
+        let peerConnections = {};
 
-        // 1. Charger la caméra de Nantes
         navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 }, audio: true })
             .then(stream => {
                 localStream = stream;
@@ -50,36 +46,25 @@
                 statusText.innerText = "Caméra prête.";
             });
 
-        // 2. Connexion Signalisation
-        sig.onopen = () => {
-            sig.send(JSON.stringify({ type: 'login', name: 'nantes' }));
-            statusText.innerText = "Connecté. Prêt à émettre.";
-        };
+        sig.onopen = () => sig.send(JSON.stringify({ type: 'login', name: 'nantes' }));
 
-        // 3. BOUTON : Envoi vers OBS PARIS
         document.getElementById('startBtn').onclick = async () => {
             statusText.innerText = "Connexion à OBS Paris...";
             const pc = new RTCPeerConnection(config);
             peerConnections['obs_paris'] = pc;
-
             localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
-
             pc.onicecandidate = e => {
                 if (e.candidate) sig.send(JSON.stringify({ type: 'candidate', target: 'obs_paris', candidate: e.candidate }));
             };
-
             const offer = await pc.createOffer();
             await pc.setLocalDescription(offer);
             sig.send(JSON.stringify({ type: 'offer', target: 'obs_paris', offer: offer, from: 'nantes' }));
         };
 
-        // 4. RÉCEPTION DU RETOUR (Offre venant de la page Paris)
         sig.onmessage = async (msg) => {
             const data = JSON.parse(msg.data);
-
-            // Cas : Paris nous envoie son flux (le retour)
+            
             if (data.type === 'offer' && data.from === 'paris') {
-                console.log("📩 Réception du flux de Paris...");
                 const pc = new RTCPeerConnection(config);
                 peerConnections['paris'] = pc;
 
@@ -88,25 +73,26 @@
                 };
 
                 pc.ontrack = e => {
-                    document.getElementById('remoteVideo').srcObject = e.streams[0];
-                    statusText.innerText = "✅ DIRECT ET RETOUR ACTIFS";
+                    const rv = document.getElementById('remoteVideo');
+                    if (rv.srcObject !== e.streams[0]) {
+                        rv.srcObject = e.streams[0];
+                        statusText.innerText = "✅ DIRECT ET RETOUR ACTIFS";
+                    }
                 };
 
                 await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
                 const ans = await pc.createAnswer();
                 await pc.setLocalDescription(ans);
                 sig.send(JSON.stringify({ type: 'answer', target: 'paris', answer: ans }));
-            }
-
-            // Cas : Réponses (Answer) ou Candidats ICE
-            else if (data.type === 'answer' || data.type === 'candidate') {
+            } 
+            else if (data.type === 'answer') {
                 const pc = peerConnections[data.from];
-                if (pc) {
-                    if (data.type === 'answer') {
-                        await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
-                    } else {
-                        await pc.addIceCandidate(new RTCIceCandidate(data.candidate)).catch(e => {});
-                    }
+                if (pc) await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+            } 
+            else if (data.type === 'candidate') {
+                const pc = peerConnections[data.from];
+                if (pc && pc.remoteDescription) {
+                    await pc.addIceCandidate(new RTCIceCandidate(data.candidate)).catch(e => console.error(e));
                 }
             }
         };
