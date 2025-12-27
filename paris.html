@@ -2,11 +2,11 @@
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
-    <title>WebRTC Control Room</title>
+    <title>WebRTC - PARIS</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <h1 id="title">Poste : ...</h1>
+    <h1 id="title">Poste : PARIS</h1>
     
     <div class="settings">
         <label>Ma Source Vidéo :</label>
@@ -15,20 +15,20 @@
     </div>
 
     <div class="video-grid">
-        <div class="video-container">
+        <div class="video-container" id="localContainer">
             <div class="label">MON ENVOI (LOCAL)</div>
             <video id="localVideo" autoplay playsinline muted></video>
         </div>
 
-        <div class="video-container">
-            <div class="label">RETOUR DISTANT (LIVE)</div>
+        <div class="video-container" id="remoteContainer">
+            <div class="label">RETOUR NANTES (LIVE)</div>
             <video id="remoteVideo" autoplay playsinline></video>
         </div>
     </div>
 
     <script>
-        const MY_ID = 'paris';     
-        const TARGET_ID = 'nantes';    
+        const MY_ID = 'paris'; 
+        const TARGET_ID = 'nantes';
     </script>
     <script src="main.js"></script>
 </body>

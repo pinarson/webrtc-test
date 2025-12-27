@@ -1,3 +1,14 @@
+function checkNDIMode() {
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.has('ndi')) {
+        console.log("Mode NDI détecté");
+        document.body.classList.add('ndi-mode');
+    }
+}
+
+// On lance la vérification immédiatement
+checkNDIMode();
+
 // Détection du mode NDI
 const urlParams = new URLSearchParams(window.location.search);
 if (urlParams.has('ndi')) {
