@@ -6,7 +6,7 @@ document.getElementById('title').innerText = "Poste : " + MY_ID.toUpperCase();
 let localStream;
 let pc;
 const configuration = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
-const signaling = new WebSocket('wss://td-signaling-server-production.up.railway.app');
+const signaling = new WebSocket('wss://railway-webrtc-production.up.railway.app');
 
 // --- 1. GESTION DES SOURCES VIDEO ---
 async function getDevices() {
