@@ -71,10 +71,26 @@ function createPeerConnection(target) {
 }
 
 document.getElementById('startCall').onclick = async () => {
+    if (signaling.readyState !== WebSocket.OPEN) {
+        alert("Le serveur de signalement n'est pas encore prêt. Attendez 2 secondes.");
+        return;
+    }
+    
+    console.log("Tentative d'appel vers :", TARGET_ID);
     createPeerConnection(TARGET_ID);
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-    signaling.send(JSON.stringify({ type: 'offer', target: TARGET_ID, offer: offer, from: MY_ID }));
+    
+    try {
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        signaling.send(JSON.stringify({ 
+            type: 'offer', 
+            target: TARGET_ID, 
+            offer: offer, 
+            from: MY_ID 
+        }));
+    } catch (err) {
+        console.error("Erreur lors de la création de l'offre :", err);
+    }
 };
 
 async function handleOffer(offer, from) {
