@@ -1,26 +1,21 @@
-// --- 0. VARIABLES GLOBALES ---
 const videoSelect = document.querySelector('select#videoSource');
 const localVideo = document.getElementById('localVideo');
 const remoteVideo = document.getElementById('remoteVideo');
 const titleElement = document.getElementById('title');
 
 let localStream;
-let pc;
+// REMPLACÉ : On utilise un objet pour stocker plusieurs connexions
+let peerConnections = {}; 
+
 const configuration = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
 const signaling = new WebSocket('wss://railway-webrtc-production.up.railway.app');
 
-// --- 1. INITIALISATION & MODE NDI ---
 function initPage() {
     if (titleElement) titleElement.innerText = "Poste : " + MY_ID.toUpperCase();
-
     const urlParams = new URLSearchParams(window.location.search);
     if (urlParams.has('ndi')) {
-        console.log("🚀 Mode NDI activé");
         document.body.classList.add('ndi-mode');
-        
-        // Auto-start uniquement si on est en mode NDI
         signaling.addEventListener('open', () => {
-            console.log("📡 Serveur prêt, lancement de l'appel auto dans 3s...");
             setTimeout(() => {
                 const btn = document.getElementById('startCall');
                 if (btn) btn.click();
@@ -29,7 +24,6 @@ function initPage() {
     }
 }
 
-// --- 2. GESTION DES SOURCES VIDEO ---
 async function getDevices() {
     const devices = await navigator.mediaDevices.enumerateDevices();
     videoSelect.innerHTML = '';
@@ -44,47 +38,39 @@ async function getDevices() {
 }
 
 async function startStream() {
-    if (localStream) {
-        localStream.getTracks().forEach(track => track.stop());
-    }
-    const videoSource = videoSelect.value;
+    if (localStream) localStream.getTracks().forEach(track => track.stop());
     const constraints = {
-        video: { 
-            deviceId: videoSource ? { exact: videoSource } : undefined,
-            width: { ideal: 1920 }, // On demande de la HD
-            height: { ideal: 1080 }
-        },
+        video: { deviceId: videoSelect.value ? { exact: videoSelect.value } : undefined, width: { ideal: 1920 }, height: { ideal: 1080 } },
         audio: true
     };
     try {
         localStream = await navigator.mediaDevices.getUserMedia(constraints);
         localVideo.srcObject = localStream;
-    } catch (e) {
-        console.error("Erreur caméra:", e);
-    }
+    } catch (e) { console.error(e); }
 }
 
 videoSelect.onchange = startStream;
 
-// --- 3. SIGNALEMENT ---
-signaling.onopen = () => {
-    signaling.send(JSON.stringify({ type: 'login', name: MY_ID }));
-};
+signaling.onopen = () => signaling.send(JSON.stringify({ type: 'login', name: MY_ID }));
 
 signaling.onmessage = async (message) => {
     const data = JSON.parse(message.data);
+    
+    // On récupère la connexion spécifique à l'envoyeur
+    let pc = peerConnections[data.from];
+
     if (data.type === 'offer') {
         await handleOffer(data.offer, data.from);
     } else if (data.type === 'answer') {
-        await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+        if (pc) await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
     } else if (data.type === 'candidate') {
         if (pc) await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
     }
 };
 
-// --- 4. WEBRTC LOGIQUE ---
+// Modifié pour accepter un ID cible
 function createPeerConnection(target) {
-    pc = new RTCPeerConnection(configuration);
+    const pc = new RTCPeerConnection(configuration);
     
     pc.onicecandidate = (event) => {
         if (event.candidate) {
@@ -93,56 +79,38 @@ function createPeerConnection(target) {
     };
 
     pc.ontrack = (event) => {
-        remoteVideo.srcObject = event.streams[0];
+        if (remoteVideo) remoteVideo.srcObject = event.streams[0];
     };
 
     localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+    
+    // On enregistre cette connexion dans notre dictionnaire
+    peerConnections[target] = pc;
+    return pc;
 }
 
 document.getElementById('startCall').onclick = async () => {
     if (signaling.readyState !== WebSocket.OPEN) return;
     
-    // LISTE DES DESTINATAIRES
-    // On envoie à l'ami ('paris') ET aux récepteurs OBS
     const targets = [TARGET_ID, 'obs_nantes', 'obs_paris'];
-    
-    console.log("🚀 Envoi du flux vers :", targets);
+    console.log("🚀 Broadcast vers :", targets);
 
     for (const target of targets) {
-        // IMPORTANT : On crée une connexion NEUVE pour chaque cible
-        const pcTarget = new RTCPeerConnection(configuration);
-        
-        // On gère les candidats ICE pour cette cible précise
-        pcTarget.onicecandidate = (event) => {
-            if (event.candidate) {
-                signaling.send(JSON.stringify({ 
-                    type: 'candidate', target: target, candidate: event.candidate 
-                }));
-            }
-        };
-
-        // On ajoute ta caméra à cette connexion
-        localStream.getTracks().forEach(track => pcTarget.addTrack(track, localStream));
-
-        // On crée l'offre pour cette cible
-        const offer = await pcTarget.createOffer();
-        await pcTarget.setLocalDescription(offer);
-        
-        signaling.send(JSON.stringify({ 
-            type: 'offer', target: target, offer: offer, from: MY_ID 
-        }));
+        const pc = createPeerConnection(target);
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        signaling.send(JSON.stringify({ type: 'offer', target: target, offer: offer, from: MY_ID }));
     }
 };
 
 async function handleOffer(offer, from) {
-    createPeerConnection(from);
+    const pc = createPeerConnection(from);
     await pc.setRemoteDescription(new RTCSessionDescription(offer));
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
     signaling.send(JSON.stringify({ type: 'answer', target: from, answer: answer }));
 }
 
-// --- 5. LANCEMENT FINAL ---
 initPage();
 navigator.mediaDevices.ondevicechange = getDevices;
 getDevices().then(startStream);
