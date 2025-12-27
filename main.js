@@ -1,41 +1,35 @@
-function checkNDIMode() {
-    const urlParams = new URLSearchParams(window.location.search);
-    if (urlParams.has('ndi')) {
-        console.log("Mode NDI détecté");
-        document.body.classList.add('ndi-mode');
-    }
-}
-
-// On lance la vérification immédiatement
-checkNDIMode();
-
-// Détection du mode NDI
-const urlParams = new URLSearchParams(window.location.search);
-if (urlParams.has('ndi')) {
-    document.body.classList.add('ndi-mode');
-}
-
-// Optionnel : Lancement automatique si mode NDI
-if (urlParams.has('ndi')) {
-    signaling.addEventListener('open', () => {
-        setTimeout(() => {
-            console.log("Auto-start NDI...");
-            document.getElementById('startCall').click();
-        }, 2000);
-    });
-}
-
+// --- 0. VARIABLES GLOBALES ---
 const videoSelect = document.querySelector('select#videoSource');
 const localVideo = document.getElementById('localVideo');
 const remoteVideo = document.getElementById('remoteVideo');
-document.getElementById('title').innerText = "Poste : " + MY_ID.toUpperCase();
+const titleElement = document.getElementById('title');
 
 let localStream;
 let pc;
 const configuration = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
 const signaling = new WebSocket('wss://railway-webrtc-production.up.railway.app');
 
-// --- 1. GESTION DES SOURCES VIDEO ---
+// --- 1. INITIALISATION & MODE NDI ---
+function initPage() {
+    if (titleElement) titleElement.innerText = "Poste : " + MY_ID.toUpperCase();
+
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.has('ndi')) {
+        console.log("🚀 Mode NDI activé");
+        document.body.classList.add('ndi-mode');
+        
+        // Auto-start uniquement si on est en mode NDI
+        signaling.addEventListener('open', () => {
+            console.log("📡 Serveur prêt, lancement de l'appel auto dans 3s...");
+            setTimeout(() => {
+                const btn = document.getElementById('startCall');
+                if (btn) btn.click();
+            }, 3000);
+        });
+    }
+}
+
+// --- 2. GESTION DES SOURCES VIDEO ---
 async function getDevices() {
     const devices = await navigator.mediaDevices.enumerateDevices();
     videoSelect.innerHTML = '';
@@ -55,16 +49,24 @@ async function startStream() {
     }
     const videoSource = videoSelect.value;
     const constraints = {
-        video: { deviceId: videoSource ? { exact: videoSource } : undefined },
+        video: { 
+            deviceId: videoSource ? { exact: videoSource } : undefined,
+            width: { ideal: 1920 }, // On demande de la HD
+            height: { ideal: 1080 }
+        },
         audio: true
     };
-    localStream = await navigator.mediaDevices.getUserMedia(constraints);
-    localVideo.srcObject = localStream;
+    try {
+        localStream = await navigator.mediaDevices.getUserMedia(constraints);
+        localVideo.srcObject = localStream;
+    } catch (e) {
+        console.error("Erreur caméra:", e);
+    }
 }
 
 videoSelect.onchange = startStream;
 
-// --- 2. SIGNALEMENT ---
+// --- 3. SIGNALEMENT ---
 signaling.onopen = () => {
     signaling.send(JSON.stringify({ type: 'login', name: MY_ID }));
 };
@@ -80,7 +82,7 @@ signaling.onmessage = async (message) => {
     }
 };
 
-// --- 3. WEBRTC ---
+// --- 4. WEBRTC LOGIQUE ---
 function createPeerConnection(target) {
     pc = new RTCPeerConnection(configuration);
     
@@ -99,24 +101,21 @@ function createPeerConnection(target) {
 
 document.getElementById('startCall').onclick = async () => {
     if (signaling.readyState !== WebSocket.OPEN) {
-        alert("Le serveur de signalement n'est pas encore prêt. Attendez 2 secondes.");
+        console.error("Signalisation non prête");
         return;
     }
     
-    console.log("Tentative d'appel vers :", TARGET_ID);
+    console.log("📞 Appel vers :", TARGET_ID);
     createPeerConnection(TARGET_ID);
     
     try {
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
         signaling.send(JSON.stringify({ 
-            type: 'offer', 
-            target: TARGET_ID, 
-            offer: offer, 
-            from: MY_ID 
+            type: 'offer', target: TARGET_ID, offer: offer, from: MY_ID 
         }));
     } catch (err) {
-        console.error("Erreur lors de la création de l'offre :", err);
+        console.error("Erreur offre:", err);
     }
 };
 
@@ -128,6 +127,7 @@ async function handleOffer(offer, from) {
     signaling.send(JSON.stringify({ type: 'answer', target: from, answer: answer }));
 }
 
-// Lancement
+// --- 5. LANCEMENT FINAL ---
+initPage();
 navigator.mediaDevices.ondevicechange = getDevices;
 getDevices().then(startStream);
