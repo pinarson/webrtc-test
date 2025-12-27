@@ -90,16 +90,36 @@ function createPeerConnection(target) {
 }
 
 document.getElementById('startCall').onclick = async () => {
-    if (signaling.readyState !== WebSocket.OPEN) return;
+    if (signaling.readyState !== WebSocket.OPEN) {
+        console.error("❌ Serveur non connecté");
+        return;
+    }
     
-    const targets = [TARGET_ID, 'obs_nantes', 'obs_paris'];
-    console.log("🚀 Broadcast vers :", targets);
+    // On définit les cibles. Vérifiez bien l'orthographe !
+    const targets = [TARGET_ID, 'obs_nantes']; 
+    
+    console.log("📢 DÉBUT DU BROADCAST...");
 
     for (const target of targets) {
-        const pc = createPeerConnection(target);
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-        signaling.send(JSON.stringify({ type: 'offer', target: target, offer: offer, from: MY_ID }));
+        console.log("👉 Tentative d'offre vers : " + target);
+        
+        try {
+            const pc = createPeerConnection(target);
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            
+            const message = { 
+                type: 'offer', 
+                target: target, 
+                offer: offer, 
+                from: MY_ID 
+            };
+            
+            signaling.send(JSON.stringify(message));
+            console.log("✅ Message envoyé au serveur pour : " + target);
+        } catch (err) {
+            console.error("❌ Échec vers " + target, err);
+        }
     }
 };
 

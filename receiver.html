@@ -35,37 +35,32 @@
         };
 
         sig.onmessage = async (msg) => {
-            const data = JSON.parse(msg.data);
-            
-            // On n'accepte l'offre que si elle vient de l'émetteur attendu
-            if (data.type === 'offer' && data.from === FROM_ID) {
-                status.innerText = "Réception du flux de " + data.from + "...";
-                
-                pc = new RTCPeerConnection(config);
-                
-                pc.onicecandidate = (e) => {
-                    if (e.candidate) {
-                        sig.send(JSON.stringify({type:'candidate', target:data.from, candidate:e.candidate}));
-                    }
-                };
+    const data = JSON.parse(msg.data);
+    console.log("📩 Message reçu du serveur :", data.type, "venant de :", data.from);
 
-                pc.ontrack = (e) => {
-                    console.log("Flux vidéo reçu !");
-                    status.innerText = "DIRECT : " + FROM_ID;
-                    document.getElementById('v').srcObject = e.streams[0];
-                    // Petit délai pour cacher le statut
-                    setTimeout(() => { status.style.display = 'none'; }, 2000);
-                };
-
-                await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
-                const ans = await pc.createAnswer();
-                await pc.setLocalDescription(ans);
-                sig.send(JSON.stringify({type:'answer', target:data.from, answer:ans}));
-            } 
-            else if (data.type === 'candidate' && pc) {
-                await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+    if (data.type === 'offer') {
+        // ON ACCEPTE TOUT POUR TESTER
+        status.innerText = "OFFRE REÇUE DE : " + data.from;
+        
+        pc = new RTCPeerConnection(config);
+        pc.onicecandidate = (e) => {
+            if (e.candidate) {
+                sig.send(JSON.stringify({type:'candidate', target:data.from, candidate:e.candidate}));
             }
         };
+        pc.ontrack = (e) => {
+            status.innerText = "IMAGE REÇUE !";
+            document.getElementById('v').srcObject = e.streams[0];
+        };
+
+        await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+        const ans = await pc.createAnswer();
+        await pc.setLocalDescription(ans);
+        sig.send(JSON.stringify({type:'answer', target:data.from, answer:ans}));
+    } else if (data.type === 'candidate' && pc) {
+        await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+    }
+};
 
         sig.onclose = () => { status.innerText = "Déconnecté du serveur"; };
     </script>
