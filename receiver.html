@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <title>WebRTC Receiver for OBS</title>
+    <style>
+        body { margin: 0; background: black; overflow: hidden; }
+        video { width: 100vw; height: 100vh; object-fit: contain; }
+    </style>
+</head>
+<body>
+    <video id="remoteVideo" autoplay playsinline></video>
+
+    <script>
+        // On récupère qui on doit écouter depuis l'URL (ex: ?from=paris)
+        const urlParams = new URLSearchParams(window.location.search);
+        const TARGET_ID = urlParams.get('from'); 
+        const MY_ID = "obs_" + TARGET_ID; // Identifiant unique pour cette fenêtre OBS
+
+        const remoteVideo = document.getElementById('remoteVideo');
+        const configuration = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+        const signaling = new WebSocket('wss://railway-webrtc-production.up.railway.app');
+
+        let pc;
+
+        signaling.onopen = () => {
+            signaling.send(JSON.stringify({ type: 'login', name: MY_ID }));
+            console.log("OBS Receiver connecté, en attente de : " + TARGET_ID);
+        };
+
+        signaling.onmessage = async (message) => {
+            const data = JSON.parse(message.data);
+            if (data.type === 'offer') {
+                pc = new RTCPeerConnection(configuration);
+                
+                pc.onicecandidate = (event) => {
+                    if (event.candidate) {
+                        signaling.send(JSON.stringify({ type: 'candidate', target: data.from, candidate: event.candidate }));
+                    }
+                };
+
+                pc.ontrack = (event) => {
+                    remoteVideo.srcObject = event.streams[0];
+                };
+
+                await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+                const answer = await pc.createAnswer();
+                await pc.setLocalDescription(answer);
+                
+                signaling.send(JSON.stringify({ type: 'answer', target: data.from, answer: answer }));
+            } else if (data.type === 'candidate' && pc) {
+                await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+            }
+        };
+    </script>
+</body>
+</html>
