@@ -1,80 +1,37 @@
 <!DOCTYPE html>
-<html lang="fr">
+<html>
 <head>
-    <meta charset="UTF-8">
-    <title>OBS Receiver WebRTC</title>
+    <title>OBS FLUX HD</title>
     <style>
-        body { margin: 0; background: black; overflow: hidden; font-family: sans-serif; }
-        video { width: 100vw; height: 100vh; object-fit: contain; }
-        #status { position: absolute; top: 10px; left: 10px; color: rgba(255,255,255,0.5); font-size: 10px; }
+        body { margin: 0; background: black; overflow: hidden; }
+        video { width: 1920px; height: 1080px; object-fit: cover; }
     </style>
 </head>
 <body>
-    <div id="status">En attente de connexion...</div>
-    <video id="v" autoplay playsinline muted></video> 
-
+    <video id="v" autoplay playsinline muted></video>
     <script>
-        const status = document.getElementById('status');
-        const urlParams = new URLSearchParams(window.location.search);
-        
-        // On récupère l'ID depuis l'URL (ex: ?id=obs_nantes&from=nantes)
-        const MY_ID = urlParams.get('id'); 
-        const FROM_ID = urlParams.get('from'); 
-
-        if (!MY_ID || !FROM_ID) {
-            status.innerText = "ERREUR : Paramètres id ou from manquants dans l'URL";
-        }
-
         const sig = new WebSocket('wss://railway-webrtc-production.up.railway.app');
         const config = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
         let pc;
 
-        sig.onopen = () => {
-            sig.send(JSON.stringify({ type: 'login', name: MY_ID }));
-            status.innerText = "Connecté au serveur en tant que " + MY_ID;
-        };
+        // On s'identifie comme le récepteur attendu par Nantes
+        sig.onopen = () => sig.send(JSON.stringify({ type: 'login', name: 'obs_receiver' }));
 
         sig.onmessage = async (msg) => {
-    const data = JSON.parse(msg.data);
-    console.log("📩 Message reçu du serveur :", data.type, "venant de :", data.from);
-
-    if (data.type === 'offer') {
-        // ON ACCEPTE TOUT POUR TESTER
-        status.innerText = "OFFRE REÇUE DE : " + data.from;
-        
-        pc = new RTCPeerConnection(config);
-        pc.onicecandidate = (e) => {
-            if (e.candidate) {
-                sig.send(JSON.stringify({type:'candidate', target:data.from, candidate:e.candidate}));
+            const data = JSON.parse(msg.data);
+            if (data.type === 'offer' && data.from === 'nantes') {
+                pc = new RTCPeerConnection(config);
+                pc.onicecandidate = e => e.candidate && sig.send(JSON.stringify({ type: 'candidate', target: 'nantes', candidate: e.candidate }));
+                pc.ontrack = e => { document.getElementById('v').srcObject = e.streams[0]; };
+                
+                await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+                const ans = await pc.createAnswer();
+                await pc.setLocalDescription(ans);
+                sig.send(JSON.stringify({ type: 'answer', target: 'nantes', answer: ans }));
+            } else if (data.type === 'candidate' && pc) {
+                await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
             }
         };
-        pc.ontrack = (e) => {
-    status.innerText = "IMAGE REÇUE !";
-    const videoElement = document.getElementById('v');
-    
-    // On lie le flux
-    videoElement.srcObject = e.streams[0];
-    
-    // On force la lecture
-    videoElement.play().then(() => {
-        console.log("Lecture lancée avec succès");
-        status.style.display = 'none'; // Cache le texte si ça marche
-    }).catch(err => {
-        console.error("Erreur de lecture auto:", err);
-        status.innerText = "CLIQUEZ ICI POUR ACTIVER L'IMAGE";
-    });
-};
-
-        await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
-        const ans = await pc.createAnswer();
-        await pc.setLocalDescription(ans);
-        sig.send(JSON.stringify({type:'answer', target:data.from, answer:ans}));
-    } else if (data.type === 'candidate' && pc) {
-        await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
-    }
-};
-
-        sig.onclose = () => { status.innerText = "Déconnecté du serveur"; };
     </script>
 </body>
 </html>

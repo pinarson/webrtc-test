@@ -1,35 +1,61 @@
 <!DOCTYPE html>
-<html lang="fr">
+<html>
 <head>
-    <meta charset="UTF-8">
-    <title>WebRTC - NANTES</title>
-    <link rel="stylesheet" href="style.css">
+    <title>CONTRÔLE NANTES</title>
+    <style>
+        body { background: #111; color: white; font-family: sans-serif; text-align: center; padding: 20px; }
+        video { width: 80%; max-width: 600px; border: 2px solid #007bff; border-radius: 8px; background: black; }
+        button { padding: 15px 30px; background: #28a745; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 18px; margin: 20px; font-weight: bold; }
+        #status { color: #aaa; }
+    </style>
 </head>
 <body>
-    <h1 id="title">Poste : NANTES</h1>
-    
-    <div class="settings">
-        <label>Ma Source Vidéo :</label>
-        <select id="videoSource"></select>
-        <button id="startCall">LANCER LE DIRECT</button>
-    </div>
-
-    <div class="video-grid">
-        <div class="video-container" id="localContainer">
-            <div class="label">MON ENVOI (LOCAL)</div>
-            <video id="localVideo" autoplay playsinline muted></video>
-        </div>
-
-        <div class="video-container" id="remoteContainer">
-            <div class="label">RETOUR PARIS (LIVE)</div>
-            <video id="remoteVideo" autoplay playsinline></video>
-        </div>
-    </div>
+    <h1>📍 CONSOLE NANTES</h1>
+    <p>MON RETOUR CAMÉRA</p>
+    <video id="localVideo" autoplay playsinline muted></video>
+    <br>
+    <button id="startBtn">🔴 LANCER LE DIRECT VERS OBS</button>
+    <p id="status">Statut : Prêt</p>
 
     <script>
-        const MY_ID = 'nantes'; 
-        const TARGET_ID = 'paris';
+        const sig = new WebSocket('wss://railway-webrtc-production.up.railway.app');
+        const config = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+        let localStream;
+
+        // 1. Capture en Haute Qualité pour OBS
+        navigator.mediaDevices.getUserMedia({ 
+            video: { width: 1920, height: 1080 }, 
+            audio: true 
+        }).then(stream => {
+            localStream = stream;
+            document.getElementById('localVideo').srcObject = stream;
+        });
+
+        sig.onopen = () => sig.send(JSON.stringify({ type: 'login', name: 'nantes' }));
+
+        document.getElementById('startBtn').onclick = async () => {
+            document.getElementById('status').innerText = "📡 Envoi du flux vers OBS...";
+            const pc = new RTCPeerConnection(config);
+            
+            localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+
+            pc.onicecandidate = e => {
+                if (e.candidate) sig.send(JSON.stringify({ type: 'candidate', target: 'obs_receiver', candidate: e.candidate }));
+            };
+
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            sig.send(JSON.stringify({ type: 'offer', target: 'obs_receiver', offer: offer, from: 'nantes' }));
+            
+            sig.onmessage = async (msg) => {
+                const data = JSON.parse(msg.data);
+                if (data.type === 'answer') {
+                    await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+                    document.getElementById('status').innerText = "✅ EN DIRECT DANS OBS (1080p)";
+                }
+                if (data.type === 'candidate') await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+            };
+        };
     </script>
-    <script src="main.js"></script>
 </body>
 </html>
