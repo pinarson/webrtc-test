@@ -2,15 +2,16 @@
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
-    <title>Nantes - Console & Retour</title>
+    <title>Nantes - Console Duplex</title>
     <style>
         body { background: #111; color: white; font-family: sans-serif; text-align: center; margin: 0; padding: 20px; }
         .grid { display: flex; justify-content: center; gap: 20px; margin-top: 20px; }
         .video-box { width: 45%; max-width: 600px; background: #222; padding: 10px; border-radius: 10px; }
         video { width: 100%; border: 2px solid #333; border-radius: 8px; background: black; aspect-ratio: 16/9; }
         .live-border { border-color: #00d4ff !important; box-shadow: 0 0 15px rgba(0, 212, 255, 0.4); }
-        button { padding: 15px 30px; background: #28a745; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 18px; font-weight: bold; }
+        button { padding: 15px 30px; background: #e91111; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 18px; font-weight: bold; }
         #status { color: #00d4ff; margin-top: 15px; font-weight: bold; }
+        .label { margin-bottom: 10px; font-weight: bold; color: #aaa; }
     </style>
 </head>
 <body>
@@ -18,19 +19,19 @@
     
     <div class="grid">
         <div class="video-box">
-            <p>MA CAMÉRA</p>
+            <div class="label">MA SORTIE (VERS OBS PARIS)</div>
             <video id="localVideo" autoplay playsinline muted></video>
         </div>
         
         <div class="video-box">
-            <p>RETOUR PARIS</p>
+            <div class="label">RETOUR DE PARIS</div>
             <video id="remoteVideo" autoplay playsinline class="live-border"></video>
         </div>
     </div>
 
     <div style="margin-top: 30px;">
-        <button id="startBtn">🔴 LANCER MON FLUX VERS OBS NANTES</button>
-        <p id="status">Connexion au serveur...</p>
+        <button id="startBtn">🔴 LANCER LE DIRECT</button>
+        <p id="status">Initialisation...</p>
     </div>
 
     <script>
@@ -39,9 +40,9 @@
         const config = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
         
         let localStream;
-        let pcs = {}; 
+        let peerConnections = {}; // Pour stocker 'obs_paris' et 'paris' séparément
 
-        // 1. Caméra locale
+        // 1. Charger la caméra de Nantes
         navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 }, audio: true })
             .then(stream => {
                 localStream = stream;
@@ -49,57 +50,63 @@
                 statusText.innerText = "Caméra prête.";
             });
 
+        // 2. Connexion Signalisation
         sig.onopen = () => {
             sig.send(JSON.stringify({ type: 'login', name: 'nantes' }));
-            statusText.innerText = "Connecté. En attente du flux de Paris...";
+            statusText.innerText = "Connecté. Prêt à émettre.";
         };
 
-        // 2. Envoyer vers TON OBS local
+        // 3. BOUTON : Envoi vers OBS PARIS
         document.getElementById('startBtn').onclick = async () => {
-            statusText.innerText = "Émission vers ton OBS...";
+            statusText.innerText = "Connexion à OBS Paris...";
             const pc = new RTCPeerConnection(config);
-            pcs['obs_nantes'] = pc; 
-            
+            peerConnections['obs_paris'] = pc;
+
             localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
-            
+
             pc.onicecandidate = e => {
-                if (e.candidate) sig.send(JSON.stringify({ type: 'candidate', target: 'obs_nantes', candidate: e.candidate }));
+                if (e.candidate) sig.send(JSON.stringify({ type: 'candidate', target: 'obs_paris', candidate: e.candidate }));
             };
 
             const offer = await pc.createOffer();
             await pc.setLocalDescription(offer);
-            sig.send(JSON.stringify({ type: 'offer', target: 'obs_nantes', offer: offer, from: 'nantes' }));
+            sig.send(JSON.stringify({ type: 'offer', target: 'obs_paris', offer: offer, from: 'nantes' }));
         };
 
-        // 3. Recevoir de PARIS
+        // 4. RÉCEPTION DU RETOUR (Offre venant de la page Paris)
         sig.onmessage = async (msg) => {
             const data = JSON.parse(msg.data);
 
+            // Cas : Paris nous envoie son flux (le retour)
             if (data.type === 'offer' && data.from === 'paris') {
-                console.log("📩 Paris t'envoie son image...");
+                console.log("📩 Réception du flux de Paris...");
                 const pc = new RTCPeerConnection(config);
-                pcs['paris'] = pc; 
-                
+                peerConnections['paris'] = pc;
+
                 pc.onicecandidate = e => {
                     if (e.candidate) sig.send(JSON.stringify({ type: 'candidate', target: 'paris', candidate: e.candidate }));
                 };
 
                 pc.ontrack = e => {
                     document.getElementById('remoteVideo').srcObject = e.streams[0];
-                    statusText.innerText = "✅ RETOUR PARIS REÇU";
+                    statusText.innerText = "✅ DIRECT ET RETOUR ACTIFS";
                 };
 
                 await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
                 const ans = await pc.createAnswer();
                 await pc.setLocalDescription(ans);
                 sig.send(JSON.stringify({ type: 'answer', target: 'paris', answer: ans }));
-            } 
-            
+            }
+
+            // Cas : Réponses (Answer) ou Candidats ICE
             else if (data.type === 'answer' || data.type === 'candidate') {
-                const pc = pcs[data.from];
+                const pc = peerConnections[data.from];
                 if (pc) {
-                    if (data.type === 'answer') await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
-                    else await pc.addIceCandidate(new RTCIceCandidate(data.candidate)).catch(e => {});
+                    if (data.type === 'answer') {
+                        await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+                    } else {
+                        await pc.addIceCandidate(new RTCIceCandidate(data.candidate)).catch(e => {});
+                    }
                 }
             }
         };
