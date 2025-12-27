@@ -2,92 +2,116 @@
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
-    <title>Console NANTES - Régie</title>
+    <title>Nantes - Console & Duplex</title>
     <style>
         body { background: #111; color: white; font-family: sans-serif; text-align: center; margin: 0; padding: 20px; }
         .grid { display: flex; justify-content: center; gap: 20px; margin-top: 20px; }
-        .video-box { width: 45%; max-width: 600px; }
+        .video-box { width: 45%; max-width: 600px; background: #222; padding: 10px; border-radius: 10px; }
         video { width: 100%; border: 2px solid #333; border-radius: 8px; background: black; aspect-ratio: 16/9; }
-        .live { border-color: #00d4ff; box-shadow: 0 0 15px rgba(0, 212, 255, 0.3); }
+        .live-border { border-color: #00d4ff !important; box-shadow: 0 0 15px rgba(0, 212, 255, 0.4); }
         button { padding: 15px 30px; background: #e91111; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 18px; font-weight: bold; }
-        #status { color: #aaa; margin-top: 10px; font-size: 14px; }
-        p { margin: 5px 0; font-size: 12px; text-transform: uppercase; letter-spacing: 1px; }
+        #status { color: #00d4ff; margin-top: 15px; font-weight: bold; }
+        .label { margin-bottom: 10px; font-weight: bold; color: #aaa; text-transform: uppercase; }
     </style>
 </head>
 <body>
-    <h1>📍 CONSOLE NANTES</h1>
+    <h1>📍 CONSOLE NANTES (DUPLEX)</h1>
     
     <div class="grid">
         <div class="video-box">
-            <p>Ma Caméra (Sortie vers Paris)</p>
+            <div class="label">Ma Caméra (Sortie)</div>
             <video id="localVideo" autoplay playsinline muted></video>
         </div>
+        
         <div class="video-box">
-            <p>Retour Paris (Entrée)</p>
-            <video id="remoteVideo" autoplay playsinline class="live"></video>
+            <div class="label">Retour Paris (Entrée)</div>
+            <video id="remoteVideo" autoplay playsinline class="live-border"></video>
         </div>
     </div>
 
     <div style="margin-top: 30px;">
         <button id="startBtn">🔴 ÉTABLIR LE DUPLEX</button>
-        <p id="status">Statut : Prêt</p>
+        <p id="status">Connexion au serveur...</p>
     </div>
 
     <script>
+        const statusText = document.getElementById('status');
         const sig = new WebSocket('wss://railway-webrtc-production.up.railway.app');
         const config = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+        
         let localStream;
-        let pcOutgoing; // Pour envoyer à OBS Paris
-        let pcIncoming; // Pour recevoir de Paris
+        let pcOutgoing; // La connexion pour ENVOYER
+        let pcIncoming; // La connexion pour RECEVOIR
 
-        // 1. Init Caméra
-        navigator.mediaDevices.getUserMedia({ video: { width: 1920, height: 1080 }, audio: true })
+        // 1. Initialisation Caméra Nantes
+        navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 }, audio: true })
             .then(stream => {
                 localStream = stream;
                 document.getElementById('localVideo').srcObject = stream;
-            });
+                statusText.innerText = "Caméra prête. En attente du serveur...";
+            }).catch(e => statusText.innerText = "Erreur caméra : " + e);
 
-        sig.onopen = () => sig.send(JSON.stringify({ type: 'login', name: 'nantes' }));
+        // 2. Login au serveur
+        sig.onopen = () => {
+            sig.send(JSON.stringify({ type: 'login', name: 'nantes' }));
+            statusText.innerText = "Connecté. En attente de Paris...";
+        };
 
+        // 3. Gestion du bouton d'envoi (Sortie vers OBS Paris)
         document.getElementById('startBtn').onclick = async () => {
-            document.getElementById('status').innerText = "📡 Négociation du Duplex...";
-            
-            // --- PARTIE ENVOI (Vers OBS Paris) ---
+            statusText.innerText = "Émission vers OBS Paris...";
             pcOutgoing = new RTCPeerConnection(config);
+            
             localStream.getTracks().forEach(track => pcOutgoing.addTrack(track, localStream));
+            
             pcOutgoing.onicecandidate = e => {
                 if (e.candidate) sig.send(JSON.stringify({ type: 'candidate', target: 'obs_paris', candidate: e.candidate }));
             };
+
             const offer = await pcOutgoing.createOffer();
             await pcOutgoing.setLocalDescription(offer);
             sig.send(JSON.stringify({ type: 'offer', target: 'obs_paris', offer: offer, from: 'nantes' }));
         };
 
+        // 4. LE RECEPTACLE (Logique de réception)
         sig.onmessage = async (msg) => {
             const data = JSON.parse(msg.data);
 
-            // Gestion de l'envoi vers OBS Paris (Answer)
+            // CAS A : On reçoit une réponse pour notre envoi vers OBS Paris
             if (data.type === 'answer' && data.from === 'obs_paris') {
                 await pcOutgoing.setRemoteDescription(new RTCSessionDescription(data.answer));
-                document.getElementById('status').innerText = "✅ EN DIRECT SUR OBS PARIS";
+                statusText.innerText = "✅ EN DIRECT SUR OBS PARIS";
             }
 
-            // GESTION DU RETOUR (Quand Paris t'appelle)
+            // CAS B : On reçoit une offre venant de la console de PARIS (Le retour)
             if (data.type === 'offer' && data.from === 'paris') {
+                console.log("📩 Offre reçue de Paris, création du retour...");
                 pcIncoming = new RTCPeerConnection(config);
-                pcIncoming.onicecandidate = e => e.candidate && sig.send(JSON.stringify({ type: 'candidate', target: 'paris', candidate: e.candidate }));
-                pcIncoming.ontrack = e => { document.getElementById('remoteVideo').srcObject = e.streams[0]; };
                 
+                pcIncoming.onicecandidate = e => {
+                    if (e.candidate) sig.send(JSON.stringify({ type: 'candidate', target: 'paris', candidate: e.candidate }));
+                };
+
+                pcIncoming.ontrack = e => {
+                    console.log("🎬 Flux de Paris reçu !");
+                    document.getElementById('remoteVideo').srcObject = e.streams[0];
+                };
+
                 await pcIncoming.setRemoteDescription(new RTCSessionDescription(data.offer));
                 const ans = await pcIncoming.createAnswer();
                 await pcIncoming.setLocalDescription(ans);
                 sig.send(JSON.stringify({ type: 'answer', target: 'paris', answer: ans }));
             }
 
-            // Candidats ICE
+            // CAS C : Gestion des candidats ICE (crucial pour le passage à travers les box internet)
             if (data.type === 'candidate') {
-                if (data.from === 'obs_paris' && pcOutgoing) await pcOutgoing.addIceCandidate(new RTCIceCandidate(data.candidate));
-                if (data.from === 'paris' && pcIncoming) await pcIncoming.addIceCandidate(new RTCIceCandidate(data.candidate));
+                try {
+                    if (data.from === 'obs_paris' && pcOutgoing) {
+                        await pcOutgoing.addIceCandidate(new RTCIceCandidate(data.candidate));
+                    } else if (data.from === 'paris' && pcIncoming) {
+                        await pcIncoming.addIceCandidate(new RTCIceCandidate(data.candidate));
+                    }
+                } catch (e) { console.warn("Erreur ICE", e); }
             }
         };
     </script>
