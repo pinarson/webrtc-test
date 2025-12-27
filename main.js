@@ -1,92 +1,90 @@
-const myId = 'nantes'; // À changer en 'paris' sur l'autre PC
-const targetId = 'paris'; // À changer en 'nantes' sur l'autre PC
+const videoSelect = document.querySelector('select#videoSource');
+const localVideo = document.getElementById('localVideo');
+const remoteVideo = document.getElementById('remoteVideo');
+document.getElementById('title').innerText = "Poste : " + MY_ID.toUpperCase();
 
-const configuration = {
-    iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
-};
-
-let pc;
 let localStream;
+let pc;
+const configuration = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
 const signaling = new WebSocket('wss://td-signaling-server-production.up.railway.app');
 
-// 1. Initialisation de la caméra
-async function startMedia() {
-    localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-    document.getElementById('localVideo').srcObject = localStream;
-    document.getElementById('identity').innerText = myId;
+// --- 1. GESTION DES SOURCES VIDEO ---
+async function getDevices() {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    videoSelect.innerHTML = '';
+    devices.forEach(device => {
+        if (device.kind === 'videoinput') {
+            const option = document.createElement('option');
+            option.value = device.deviceId;
+            option.text = device.label || `Caméra ${videoSelect.length + 1}`;
+            videoSelect.appendChild(option);
+        }
+    });
 }
 
-// 2. Connexion au serveur de signalement
+async function startStream() {
+    if (localStream) {
+        localStream.getTracks().forEach(track => track.stop());
+    }
+    const videoSource = videoSelect.value;
+    const constraints = {
+        video: { deviceId: videoSource ? { exact: videoSource } : undefined },
+        audio: true
+    };
+    localStream = await navigator.mediaDevices.getUserMedia(constraints);
+    localVideo.srcObject = localStream;
+}
+
+videoSelect.onchange = startStream;
+
+// --- 2. SIGNALEMENT ---
 signaling.onopen = () => {
-    signaling.send(JSON.stringify({ type: 'login', name: myId }));
+    signaling.send(JSON.stringify({ type: 'login', name: MY_ID }));
 };
 
 signaling.onmessage = async (message) => {
     const data = JSON.parse(message.data);
-
-    switch (data.type) {
-        case 'offer':
-            await handleOffer(data.offer, data.from);
-            break;
-        case 'answer':
-            await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
-            break;
-        case 'candidate':
-            await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
-            break;
+    if (data.type === 'offer') {
+        await handleOffer(data.offer, data.from);
+    } else if (data.type === 'answer') {
+        await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+    } else if (data.type === 'candidate') {
+        if (pc) await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
     }
 };
 
-// 3. Création de la connexion Peer-to-Peer
-function createPeerConnection(remoteUser) {
+// --- 3. WEBRTC ---
+function createPeerConnection(target) {
     pc = new RTCPeerConnection(configuration);
-
-    // Envoyer nos candidats réseau (ICE) à l'autre
+    
     pc.onicecandidate = (event) => {
         if (event.candidate) {
-            signaling.send(JSON.stringify({
-                type: 'candidate',
-                target: remoteUser,
-                candidate: event.candidate
-            }));
+            signaling.send(JSON.stringify({ type: 'candidate', target: target, candidate: event.candidate }));
         }
     };
 
-    // Recevoir le flux vidéo de l'autre
     pc.ontrack = (event) => {
-        document.getElementById('remoteVideo').srcObject = event.streams[0];
+        remoteVideo.srcObject = event.streams[0];
     };
 
-    // Ajouter notre flux local à la connexion
     localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
 }
 
-// 4. Lancer l'appel (Côté Nantes)
 document.getElementById('startCall').onclick = async () => {
-    createPeerConnection(targetId);
+    createPeerConnection(TARGET_ID);
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
-
-    signaling.send(JSON.stringify({
-        type: 'offer',
-        target: targetId,
-        offer: offer,
-        from: myId
-    }));
+    signaling.send(JSON.stringify({ type: 'offer', target: TARGET_ID, offer: offer, from: MY_ID }));
 };
 
-// 5. Répondre à l'appel (Côté Paris)
 async function handleOffer(offer, from) {
     createPeerConnection(from);
     await pc.setRemoteDescription(new RTCSessionDescription(offer));
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
-
-    signaling.send(JSON.stringify({
-        type: 'answer',
-        target: from,
-        answer: answer
-    }));
+    signaling.send(JSON.stringify({ type: 'answer', target: from, answer: answer }));
 }
 
-startMedia();
+// Lancement
+navigator.mediaDevices.ondevicechange = getDevices;
+getDevices().then(startStream);
