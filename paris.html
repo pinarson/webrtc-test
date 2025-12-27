@@ -1,134 +1,111 @@
-// --- 0. VARIABLES GLOBALES ---
-const videoSelect = document.querySelector('select#videoSource');
-const localVideo = document.getElementById('localVideo');
-const remoteVideo = document.getElementById('remoteVideo');
-const titleElement = document.getElementById('title');
-
-let localStream;
-let peerConnections = {}; 
-
-const configuration = { 
-    iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' }
-    ] 
-};
-
-const signaling = new WebSocket('wss://railway-webrtc-production.up.railway.app');
-
-// Identifiants fixes pour le côté Paris
-const MY_ID = 'paris';        // Lui, c'est Paris
-const OBS_NANTES = 'obs_nantes'; // Il envoie à ton OBS
-const NANTES_CONSOLE = 'nantes'; // Il reçoit de ta console
-
-// --- 1. INITIALISATION ---
-function initPage() {
-    if (titleElement) titleElement.innerText = "Poste : PARIS (DUPLEX)";
-}
-
-// --- 2. CAPTURE VIDÉO ---
-async function getDevices() {
-    const devices = await navigator.mediaDevices.enumerateDevices();
-    videoSelect.innerHTML = '';
-    devices.forEach(device => {
-        if (device.kind === 'videoinput') {
-            const option = document.createElement('option');
-            option.value = device.deviceId;
-            option.text = device.label || `Caméra ${videoSelect.length + 1}`;
-            videoSelect.appendChild(option);
-        }
-    });
-}
-
-async function startStream() {
-    if (localStream) localStream.getTracks().forEach(track => track.stop());
-    const constraints = {
-        video: { deviceId: videoSelect.value ? { exact: videoSelect.value } : undefined, width: { ideal: 1280 }, height: { ideal: 720 } },
-        audio: true
-    };
-    try {
-        localStream = await navigator.mediaDevices.getUserMedia(constraints);
-        localVideo.srcObject = localStream;
-        console.log("✅ Caméra Paris prête");
-    } catch (e) { console.error("❌ Erreur caméra Paris:", e); }
-}
-
-videoSelect.onchange = startStream;
-
-// --- 3. SIGNALISATION ---
-signaling.onopen = () => {
-    signaling.send(JSON.stringify({ type: 'login', name: MY_ID }));
-    console.log("🔌 Paris connecté au serveur");
-};
-
-signaling.onmessage = async (message) => {
-    const data = JSON.parse(message.data);
-    let pc = peerConnections[data.from];
-
-    if (data.type === 'offer') {
-        console.log("📩 Offre reçue de : " + data.from);
-        await handleOffer(data.offer, data.from);
-    } else if (data.type === 'answer') {
-        if (pc) await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
-    } else if (data.type === 'candidate') {
-        if (pc) await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
-    }
-};
-
-// --- 4. LOGIQUE WEBRTC ---
-function createPeerConnection(target) {
-    const pc = new RTCPeerConnection(configuration);
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <title>Console PARIS - Duplex</title>
+    <style>
+        body { background: #111; color: white; font-family: sans-serif; text-align: center; margin: 0; padding: 20px; }
+        .grid { display: flex; justify-content: center; gap: 20px; margin-top: 20px; }
+        .video-box { width: 45%; max-width: 600px; background: #222; padding: 10px; border-radius: 10px; }
+        video { width: 100%; border: 2px solid #333; border-radius: 8px; background: black; aspect-ratio: 16/9; }
+        .live-border { border-color: #00d4ff !important; box-shadow: 0 0 15px rgba(0, 212, 255, 0.4); }
+        button { padding: 15px 30px; background: #00d4ff; color: #111; border: none; border-radius: 5px; cursor: pointer; font-size: 18px; font-weight: bold; }
+        #status { color: #00d4ff; margin-top: 15px; font-weight: bold; }
+        .label { margin-bottom: 10px; font-weight: bold; color: #aaa; text-transform: uppercase; }
+    </style>
+</head>
+<body>
+    <h1>📍 CONSOLE PARIS (DUPLEX)</h1>
     
-    pc.onicecandidate = (event) => {
-        if (event.candidate) {
-            signaling.send(JSON.stringify({ type: 'candidate', target: target, candidate: event.candidate }));
-        }
-    };
-
-    pc.ontrack = (event) => {
-        // PARIS AFFICHE LE FLUX VENANT DE TA CONSOLE NANTES
-        if (target === NANTES_CONSOLE && remoteVideo) {
-            console.log("🎬 Affichage du retour de Nantes");
-            remoteVideo.srcObject = event.streams[0];
-        }
-    };
-
-    if (localStream) {
-        localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
-    }
-
-    peerConnections[target] = pc;
-    return pc;
-}
-
-// --- 5. BOUTON : ÉTABLIR LE DUPLEX (Envoi vers ton OBS Nantes) ---
-document.getElementById('startCall').onclick = async () => {
-    if (signaling.readyState !== WebSocket.OPEN) return;
-    if (!localStream) await startStream();
-
-    const target = OBS_NANTES; 
-    console.log("📢 Envoi du flux vers OBS NANTES...");
-
-    try {
-        const pc = createPeerConnection(target);
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
+    <div class="grid">
+        <div class="video-box">
+            <div class="label">Ma Caméra (Sortie)</div>
+            <video id="localVideo" autoplay playsinline muted></video>
+        </div>
         
-        signaling.send(JSON.stringify({ 
-            type: 'offer', target: target, offer: offer, from: MY_ID 
-        }));
-    } catch (err) {
-        console.error("❌ Erreur vers OBS Nantes", err);
-    }
-};
+        <div class="video-box">
+            <div class="label">Retour Nantes (Entrée)</div>
+            <video id="remoteVideo" autoplay playsinline class="live-border"></video>
+        </div>
+    </div>
 
-async function handleOffer(offer, from) {
-    const pc = createPeerConnection(from);
-    await pc.setRemoteDescription(new RTCSessionDescription(offer));
-    const answer = await pc.createAnswer();
-    await pc.setLocalDescription(answer);
-    signaling.send(JSON.stringify({ type: 'answer', target: from, answer: answer }));
-}
+    <div style="margin-top: 30px;">
+        <button id="startBtn">🔴 ENVOYER LE FLUX À NANTES</button>
+        <p id="status">Connexion au serveur...</p>
+    </div>
 
-initPage();
-getDevices().then(startStream);
+    <script>
+        const statusText = document.getElementById('status');
+        const sig = new WebSocket('wss://railway-webrtc-production.up.railway.app');
+        const config = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+        
+        let localStream;
+        let peerConnections = {}; // Stocke les connexions par ID
+
+        // 1. Initialisation Caméra Paris (HD)
+        navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 }, audio: true })
+            .then(stream => {
+                localStream = stream;
+                document.getElementById('localVideo').srcObject = stream;
+                statusText.innerText = "Caméra prête.";
+            }).catch(e => statusText.innerText = "Erreur caméra : " + e);
+
+        // 2. Login
+        sig.onopen = () => {
+            sig.send(JSON.stringify({ type: 'login', name: 'paris' }));
+            statusText.innerText = "Paris connecté. Prêt.";
+        };
+
+        // 3. Fonction pour créer une connexion
+        function createPC(target) {
+            const pc = new RTCPeerConnection(config);
+            localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+            
+            pc.onicecandidate = e => {
+                if (e.candidate) sig.send(JSON.stringify({ type: 'candidate', target: target, candidate: e.candidate }));
+            };
+
+            pc.ontrack = e => {
+                // Si on reçoit le flux de la console de Nantes
+                if (target === 'nantes') {
+                    document.getElementById('remoteVideo').srcObject = e.streams[0];
+                }
+            };
+
+            peerConnections[target] = pc;
+            return pc;
+        }
+
+        // 4. Bouton d'envoi vers ton OBS
+        document.getElementById('startBtn').onclick = async () => {
+            statusText.innerText = "Envoi vers OBS Nantes...";
+            const pc = createPC('obs_nantes');
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            sig.send(JSON.stringify({ type: 'offer', target: 'obs_nantes', offer: offer, from: 'paris' }));
+        };
+
+        // 5. Gestion des messages entrants
+        sig.onmessage = async (msg) => {
+            const data = JSON.parse(msg.data);
+            let pc = peerConnections[data.from];
+
+            if (data.type === 'offer') {
+                // Nantes t'envoie son retour console
+                pc = createPC(data.from);
+                await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+                const ans = await pc.createAnswer();
+                await pc.setLocalDescription(ans);
+                sig.send(JSON.stringify({ type: 'answer', target: data.from, answer: ans }));
+            } 
+            else if (data.type === 'answer' && pc) {
+                await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+                statusText.innerText = "✅ FLUX TRANSMIS À NANTES";
+            } 
+            else if (data.type === 'candidate' && pc) {
+                await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+            }
+        };
+    </script>
+</body>
+</html>

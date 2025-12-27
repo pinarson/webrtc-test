@@ -10,20 +10,27 @@ let peerConnections = {};
 const configuration = { 
     iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' }
+        { urls: 'stun:stun1.l.google.com:19302' },
+        { urls: 'stun:stun2.l.google.com:19302' }
     ] 
 };
 
 const signaling = new WebSocket('wss://railway-webrtc-production.up.railway.app');
 
-// Identifiants fixes pour ce setup
-const MY_ID = 'nantes';
-const OBS_PARIS = 'obs_paris';
-const PARIS_CONSOLE = 'paris';
-
 // --- 1. INITIALISATION ---
 function initPage() {
     if (titleElement) titleElement.innerText = "Poste : " + MY_ID.toUpperCase();
+    
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.has('ndi')) {
+        document.body.classList.add('ndi-mode');
+        signaling.onopen = () => {
+            setTimeout(() => {
+                const btn = document.getElementById('startCall');
+                if (btn) btn.click();
+            }, 3000);
+        };
+    }
 }
 
 // --- 2. CAPTURE VIDÉO ---
@@ -42,15 +49,23 @@ async function getDevices() {
 
 async function startStream() {
     if (localStream) localStream.getTracks().forEach(track => track.stop());
+    
     const constraints = {
-        video: { deviceId: videoSelect.value ? { exact: videoSelect.value } : undefined, width: { ideal: 1280 }, height: { ideal: 720 } },
+        video: { 
+            deviceId: videoSelect.value ? { exact: videoSelect.value } : undefined, 
+            width: { ideal: 1280 }, 
+            height: { ideal: 720 } 
+        },
         audio: true
     };
+
     try {
         localStream = await navigator.mediaDevices.getUserMedia(constraints);
         localVideo.srcObject = localStream;
-        console.log("✅ Ma caméra est prête");
-    } catch (e) { console.error("❌ Erreur caméra:", e); }
+        console.log("✅ Caméra chargée");
+    } catch (e) { 
+        console.error("❌ Erreur caméra:", e); 
+    }
 }
 
 videoSelect.onchange = startStream;
@@ -58,7 +73,7 @@ videoSelect.onchange = startStream;
 // --- 3. SIGNALISATION ---
 signaling.onopen = () => {
     signaling.send(JSON.stringify({ type: 'login', name: MY_ID }));
-    console.log("🔌 Connecté au serveur : Mode DUPLEX");
+    console.log("🔌 Connecté au serveur Railway");
 };
 
 signaling.onmessage = async (message) => {
@@ -66,12 +81,9 @@ signaling.onmessage = async (message) => {
     let pc = peerConnections[data.from];
 
     if (data.type === 'offer') {
-        // Si Paris nous appelle, on crée la connexion pour RECEVOIR son image
-        console.log("📩 Offre reçue de : " + data.from);
         await handleOffer(data.offer, data.from);
     } else if (data.type === 'answer') {
         if (pc) await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
-        console.log("✅ Connexion établie avec : " + data.from);
     } else if (data.type === 'candidate') {
         if (pc) await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
     }
@@ -88,13 +100,10 @@ function createPeerConnection(target) {
     };
 
     pc.ontrack = (event) => {
-        // ON N'AFFICHE QUE LE FLUX VENANT DE LA CONSOLE DE PARIS
-        if (target === PARIS_CONSOLE && remoteVideo) {
-            console.log("🎬 Affichage du retour de Paris");
-            remoteVideo.srcObject = event.streams[0];
-        }
+        if (remoteVideo) remoteVideo.srcObject = event.streams[0];
     };
 
+    // On ajoute les pistes seulement si elles existent
     if (localStream) {
         localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
     }
@@ -103,25 +112,32 @@ function createPeerConnection(target) {
     return pc;
 }
 
-// --- 5. BOUTON : ÉTABLIR LE DUPLEX (Envoi vers OBS Paris) ---
+// --- 5. BOUTON LANCER LE DIRECT ---
 document.getElementById('startCall').onclick = async () => {
     if (signaling.readyState !== WebSocket.OPEN) return;
     if (!localStream) await startStream();
 
-    // On cible uniquement l'OBS de Paris pour ton envoi
-    const target = OBS_PARIS; 
-    console.log("📢 Envoi du flux vers OBS PARIS...");
+    const targets = [TARGET_ID, 'obs_nantes', 'obs_paris']; 
+    console.log("📢 Diffusion vers :", targets);
 
-    try {
-        const pc = createPeerConnection(target);
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-        
-        signaling.send(JSON.stringify({ 
-            type: 'offer', target: target, offer: offer, from: MY_ID 
-        }));
-    } catch (err) {
-        console.error("❌ Erreur vers OBS Paris", err);
+    for (const target of targets) {
+        if (target === MY_ID) continue; // Ne pas s'appeler soi-même
+
+        try {
+            const pc = createPeerConnection(target);
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            
+            signaling.send(JSON.stringify({ 
+                type: 'offer', target: target, offer: offer, from: MY_ID 
+            }));
+            
+            console.log("📨 Offre envoyée à : " + target);
+            // Petit délai pour ne pas brusquer le serveur Railway
+            await new Promise(r => setTimeout(r, 300));
+        } catch (err) {
+            console.error("❌ Erreur vers " + target, err);
+        }
     }
 };
 
@@ -135,4 +151,5 @@ async function handleOffer(offer, from) {
 
 // Lancement
 initPage();
+navigator.mediaDevices.ondevicechange = getDevices;
 getDevices().then(startStream);
