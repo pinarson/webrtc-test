@@ -40,78 +40,77 @@
         const config = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
         
         let localStream;
-        let pcOutgoing; // La connexion pour ENVOYER
-        let pcIncoming; // La connexion pour RECEVOIR
+        let pcs = {}; // Dictionnaire pour séparer Incoming et Outgoing
 
         // 1. Initialisation Caméra Nantes
         navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 }, audio: true })
             .then(stream => {
                 localStream = stream;
                 document.getElementById('localVideo').srcObject = stream;
-                statusText.innerText = "Caméra prête. En attente du serveur...";
+                statusText.innerText = "Caméra prête.";
             }).catch(e => statusText.innerText = "Erreur caméra : " + e);
 
-        // 2. Login au serveur
         sig.onopen = () => {
             sig.send(JSON.stringify({ type: 'login', name: 'nantes' }));
             statusText.innerText = "Connecté. En attente de Paris...";
         };
 
-        // 3. Gestion du bouton d'envoi (Sortie vers OBS Paris)
+        // 3. Bouton d'envoi (Sortie vers OBS Paris)
         document.getElementById('startBtn').onclick = async () => {
             statusText.innerText = "Émission vers OBS Paris...";
-            pcOutgoing = new RTCPeerConnection(config);
+            const pc = new RTCPeerConnection(config);
+            pcs['obs_paris'] = pc; // On stocke la connexion pour OBS Paris
             
-            localStream.getTracks().forEach(track => pcOutgoing.addTrack(track, localStream));
+            localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
             
-            pcOutgoing.onicecandidate = e => {
+            pc.onicecandidate = e => {
                 if (e.candidate) sig.send(JSON.stringify({ type: 'candidate', target: 'obs_paris', candidate: e.candidate }));
             };
 
-            const offer = await pcOutgoing.createOffer();
-            await pcOutgoing.setLocalDescription(offer);
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
             sig.send(JSON.stringify({ type: 'offer', target: 'obs_paris', offer: offer, from: 'nantes' }));
         };
 
-        // 4. LE RECEPTACLE (Logique de réception)
+        // 4. Logique de réception
         sig.onmessage = async (msg) => {
             const data = JSON.parse(msg.data);
 
-            // CAS A : On reçoit une réponse pour notre envoi vers OBS Paris
-            if (data.type === 'answer' && data.from === 'obs_paris') {
-                await pcOutgoing.setRemoteDescription(new RTCSessionDescription(data.answer));
-                statusText.innerText = "✅ EN DIRECT SUR OBS PARIS";
-            }
-
-            // CAS B : On reçoit une offre venant de la console de PARIS (Le retour)
             if (data.type === 'offer' && data.from === 'paris') {
-                console.log("📩 Offre reçue de Paris, création du retour...");
-                pcIncoming = new RTCPeerConnection(config);
+                console.log("📩 Offre reçue de Paris");
+                const pc = new RTCPeerConnection(config);
+                pcs['paris'] = pc; // On stocke la connexion pour le retour Paris
                 
-                pcIncoming.onicecandidate = e => {
+                pc.onicecandidate = e => {
                     if (e.candidate) sig.send(JSON.stringify({ type: 'candidate', target: 'paris', candidate: e.candidate }));
                 };
 
-                pcIncoming.ontrack = e => {
+                pc.ontrack = e => {
                     console.log("🎬 Flux de Paris reçu !");
-                    document.getElementById('remoteVideo').srcObject = e.streams[0];
+                    const rv = document.getElementById('remoteVideo');
+                    rv.srcObject = e.streams[0];
+                    rv.play(); // Forcer la lecture
                 };
 
-                await pcIncoming.setRemoteDescription(new RTCSessionDescription(data.offer));
-                const ans = await pcIncoming.createAnswer();
-                await pcIncoming.setLocalDescription(ans);
+                await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+                const ans = await pc.createAnswer();
+                await pc.setLocalDescription(ans);
                 sig.send(JSON.stringify({ type: 'answer', target: 'paris', answer: ans }));
-            }
+            } 
+            
+            else if (data.type === 'answer') {
+                const pc = pcs[data.from];
+                if (pc) {
+                    await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+                    if (data.from === 'obs_paris') statusText.innerText = "✅ EN DIRECT SUR OBS PARIS";
+                }
+            } 
 
-            // CAS C : Gestion des candidats ICE (crucial pour le passage à travers les box internet)
-            if (data.type === 'candidate') {
-                try {
-                    if (data.from === 'obs_paris' && pcOutgoing) {
-                        await pcOutgoing.addIceCandidate(new RTCIceCandidate(data.candidate));
-                    } else if (data.from === 'paris' && pcIncoming) {
-                        await pcIncoming.addIceCandidate(new RTCIceCandidate(data.candidate));
-                    }
-                } catch (e) { console.warn("Erreur ICE", e); }
+            else if (data.type === 'candidate') {
+                const pc = pcs[data.from];
+                if (pc) {
+                    await pc.addIceCandidate(new RTCIceCandidate(data.candidate)).catch(e => console.warn(e));
+                }
             }
         };
     </script>
