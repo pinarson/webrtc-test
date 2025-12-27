@@ -101,21 +101,38 @@ function createPeerConnection(target) {
 
 document.getElementById('startCall').onclick = async () => {
     if (signaling.readyState !== WebSocket.OPEN) {
-        console.error("Signalisation non prête");
+        alert("Serveur non prêt");
         return;
     }
     
-    console.log("📞 Appel vers :", TARGET_ID);
-    createPeerConnection(TARGET_ID);
+    // On définit la liste des gens qui doivent recevoir ton flux
+    // 'paris' (le navigateur de ton ami)
+    // 'obs_nantes' (ton OBS local)
+    // 'obs_paris' (l'OBS de ton ami)
+    const targets = [TARGET_ID, 'obs_nantes', 'obs_paris'];
     
-    try {
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-        signaling.send(JSON.stringify({ 
-            type: 'offer', target: TARGET_ID, offer: offer, from: MY_ID 
-        }));
-    } catch (err) {
-        console.error("Erreur offre:", err);
+    console.log("🚀 Lancement du Broadcast vers :", targets);
+
+    for (const target of targets) {
+        // Pour chaque destinataire, on crée une connexion séparée
+        // (WebRTC demande une PeerConnection par destinataire)
+        createPeerConnection(target);
+        
+        try {
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            
+            signaling.send(JSON.stringify({ 
+                type: 'offer', 
+                target: target, 
+                offer: offer, 
+                from: MY_ID 
+            }));
+            
+            console.log("✅ Offre envoyée à : " + target);
+        } catch (err) {
+            console.error("Erreur vers " + target, err);
+        }
     }
 };
 
