@@ -2,7 +2,7 @@
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
-    <title>WebRTC Receiver for OBS</title>
+    <title>OBS Receiver</title>
     <style>
         body { margin: 0; background: black; overflow: hidden; }
         video { width: 100vw; height: 100vh; object-fit: contain; }
@@ -12,43 +12,50 @@
     <video id="remoteVideo" autoplay playsinline></video>
 
     <script>
-        // On récupère qui on doit écouter depuis l'URL (ex: ?from=paris)
+        // CONFIGURATION
         const urlParams = new URLSearchParams(window.location.search);
-        const TARGET_ID = urlParams.get('from'); 
-        const MY_ID = "obs_" + TARGET_ID; // Identifiant unique pour cette fenêtre OBS
-
-        const remoteVideo = document.getElementById('remoteVideo');
-        const configuration = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+        const SOURCE_TO_WATCH = urlParams.get('from') || 'nantes'; // Qui on veut regarder
+        const MY_ID = "obs_" + Math.floor(Math.random() * 1000); // ID unique pour OBS
+        
         const signaling = new WebSocket('wss://railway-webrtc-production.up.railway.app');
-
+        const configuration = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
         let pc;
 
         signaling.onopen = () => {
+            // 1. On se connecte au serveur
             signaling.send(JSON.stringify({ type: 'login', name: MY_ID }));
-            console.log("OBS Receiver connecté, en attente de : " + TARGET_ID);
+            console.log("Connecté en tant que " + MY_ID + ". J'attends le flux de " + SOURCE_TO_WATCH);
         };
 
         signaling.onmessage = async (message) => {
             const data = JSON.parse(message.data);
-            if (data.type === 'offer') {
+
+            // 2. Si on reçoit une offre de la source qu'on surveille
+            if (data.type === 'offer' && data.from === SOURCE_TO_WATCH) {
                 pc = new RTCPeerConnection(configuration);
                 
                 pc.onicecandidate = (event) => {
                     if (event.candidate) {
-                        signaling.send(JSON.stringify({ type: 'candidate', target: data.from, candidate: event.candidate }));
+                        signaling.send(JSON.stringify({ 
+                            type: 'candidate', target: data.from, candidate: event.candidate 
+                        }));
                     }
                 };
 
                 pc.ontrack = (event) => {
-                    remoteVideo.srcObject = event.streams[0];
+                    document.getElementById('remoteVideo').srcObject = event.streams[0];
                 };
 
                 await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
                 const answer = await pc.createAnswer();
                 await pc.setLocalDescription(answer);
                 
-                signaling.send(JSON.stringify({ type: 'answer', target: data.from, answer: answer }));
-            } else if (data.type === 'candidate' && pc) {
+                signaling.send(JSON.stringify({ 
+                    type: 'answer', target: data.from, answer: answer 
+                }));
+            } 
+            // 3. Gestion des candidats ICE
+            else if (data.type === 'candidate' && pc) {
                 await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
             }
         };
