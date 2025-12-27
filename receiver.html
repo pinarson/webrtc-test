@@ -1,32 +1,29 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>OBS Receiver</title>
-    <style>body { margin: 0; background: black; overflow: hidden; } video { width: 100vw; height: 100vh; object-fit: contain; }</style>
+    <style>body { margin:0; background:black; overflow:hidden; } video { width:100vw; height:100vh; }</style>
 </head>
 <body>
-    <video id="remoteVideo" autoplay playsinline></video>
-    <script>
+    <video id="v" autoplay playsinline muted></video> <script>
         const urlParams = new URLSearchParams(window.location.search);
-        const MY_ID = urlParams.get('id') || 'obs_default';
-        const FROM_ID = urlParams.get('from') || 'nantes';
-
-        const signaling = new WebSocket('wss://railway-webrtc-production.up.railway.app');
+        const MY_ID = urlParams.get('id'); // Doit être 'obs_nantes' ou 'obs_paris'
+        
+        const sig = new WebSocket('wss://railway-webrtc-production.up.railway.app');
         const config = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
         let pc;
 
-        signaling.onopen = () => signaling.send(JSON.stringify({ type: 'login', name: MY_ID }));
+        sig.onopen = () => sig.send(JSON.stringify({ type: 'login', name: MY_ID }));
 
-        signaling.onmessage = async (msg) => {
+        sig.onmessage = async (msg) => {
             const data = JSON.parse(msg.data);
-            if (data.type === 'offer' && data.from === FROM_ID) {
+            if (data.type === 'offer') {
                 pc = new RTCPeerConnection(config);
-                pc.onicecandidate = (e) => e.candidate && signaling.send(JSON.stringify({ type: 'candidate', target: data.from, candidate: e.candidate }));
-                pc.ontrack = (e) => document.getElementById('remoteVideo').srcObject = e.streams[0];
+                pc.onicecandidate = (e) => e.candidate && sig.send(JSON.stringify({type:'candidate', target:data.from, candidate:e.candidate}));
+                pc.ontrack = (e) => { document.getElementById('v').srcObject = e.streams[0]; };
                 await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
-                const answer = await pc.createAnswer();
-                await pc.setLocalDescription(answer);
-                signaling.send(JSON.stringify({ type: 'answer', target: data.from, answer: answer }));
+                const ans = await pc.createAnswer();
+                await pc.setLocalDescription(ans);
+                sig.send(JSON.stringify({type:'answer', target:data.from, answer:ans}));
             } else if (data.type === 'candidate' && pc) {
                 await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
             }

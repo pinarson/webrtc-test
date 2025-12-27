@@ -100,39 +100,37 @@ function createPeerConnection(target) {
 }
 
 document.getElementById('startCall').onclick = async () => {
-    if (signaling.readyState !== WebSocket.OPEN) {
-        alert("Serveur non prêt");
-        return;
-    }
+    if (signaling.readyState !== WebSocket.OPEN) return;
     
-    // On définit la liste des gens qui doivent recevoir ton flux
-    // 'paris' (le navigateur de ton ami)
-    // 'obs_nantes' (ton OBS local)
-    // 'obs_paris' (l'OBS de ton ami)
+    // LISTE DES DESTINATAIRES
+    // On envoie à l'ami ('paris') ET aux récepteurs OBS
     const targets = [TARGET_ID, 'obs_nantes', 'obs_paris'];
     
-    console.log("🚀 Lancement du Broadcast vers :", targets);
+    console.log("🚀 Envoi du flux vers :", targets);
 
     for (const target of targets) {
-        // Pour chaque destinataire, on crée une connexion séparée
-        // (WebRTC demande une PeerConnection par destinataire)
-        createPeerConnection(target);
+        // IMPORTANT : On crée une connexion NEUVE pour chaque cible
+        const pcTarget = new RTCPeerConnection(configuration);
         
-        try {
-            const offer = await pc.createOffer();
-            await pc.setLocalDescription(offer);
-            
-            signaling.send(JSON.stringify({ 
-                type: 'offer', 
-                target: target, 
-                offer: offer, 
-                from: MY_ID 
-            }));
-            
-            console.log("✅ Offre envoyée à : " + target);
-        } catch (err) {
-            console.error("Erreur vers " + target, err);
-        }
+        // On gère les candidats ICE pour cette cible précise
+        pcTarget.onicecandidate = (event) => {
+            if (event.candidate) {
+                signaling.send(JSON.stringify({ 
+                    type: 'candidate', target: target, candidate: event.candidate 
+                }));
+            }
+        };
+
+        // On ajoute ta caméra à cette connexion
+        localStream.getTracks().forEach(track => pcTarget.addTrack(track, localStream));
+
+        // On crée l'offre pour cette cible
+        const offer = await pcTarget.createOffer();
+        await pcTarget.setLocalDescription(offer);
+        
+        signaling.send(JSON.stringify({ 
+            type: 'offer', target: target, offer: offer, from: MY_ID 
+        }));
     }
 };
 
