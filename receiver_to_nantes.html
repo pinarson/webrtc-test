@@ -9,10 +9,10 @@
     </style>
 </head>
 <body>
-    <video id="v" autoplay playsinline></video>
+    <video id="v" autoplay playsinline muted></video>
     <script>
         const sig = new WebSocket('wss://railway-webrtc-production.up.railway.app');
-        const config = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' }] };
+        const config = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
         let pc;
 
         sig.onopen = () => sig.send(JSON.stringify({ type: 'login', name: 'obs_nantes' }));
@@ -21,23 +21,15 @@
             const data = JSON.parse(msg.data);
             if (data.type === 'offer' && data.from === 'paris') {
                 pc = new RTCPeerConnection(config);
-                
                 pc.onicecandidate = e => e.candidate && sig.send(JSON.stringify({ type: 'candidate', target: 'paris', candidate: e.candidate }));
-                
-                pc.ontrack = e => { 
-                    const videoElement = document.getElementById('v');
-                    videoElement.srcObject = e.streams[0];
-                    // Sécurité : on s'assure que le volume est au max et on lance la lecture
-                    videoElement.volume = 1.0;
-                    videoElement.play().catch(err => console.log("Attente interaction utilisateur pour l'audio"));
-                };
+                pc.ontrack = e => { document.getElementById('v').srcObject = e.streams[0]; };
                 
                 await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
                 const ans = await pc.createAnswer();
                 await pc.setLocalDescription(ans);
                 sig.send(JSON.stringify({ type: 'answer', target: 'paris', answer: ans }));
             } else if (data.type === 'candidate' && pc) {
-                await pc.addIceCandidate(new RTCIceCandidate(data.candidate)).catch(e => {});
+                await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
             }
         };
     </script>
