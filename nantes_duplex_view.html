@@ -95,27 +95,50 @@
 
         // 3. Création de connexion générique
         function createPC(target) {
-            const pc = new RTCPeerConnection(config);
-            pcs[target] = pc;
+    // Si une connexion existe déjà pour ce target, on la ferme proprement
+    if (pcs[target]) {
+        log("🔄 Nettoyage de l'ancienne connexion : " + target);
+        pcs[target].close();
+    }
 
-            pc.onicecandidate = e => {
-                if (e.candidate) sig.send(JSON.stringify({ type: 'candidate', target: target, candidate: e.candidate }));
-            };
+    const pc = new RTCPeerConnection(config);
+    pcs[target] = pc;
 
-            pc.ontrack = e => {
-                log("Flux reçu de : " + target);
-                if (target === 'paris') {
-                    remoteVideo.srcObject = e.streams[0];
-                    remoteVideo.play();
-                }
-            };
+    pc.onicecandidate = e => {
+        if (e.candidate) sig.send(JSON.stringify({ type: 'candidate', target: target, candidate: e.candidate }));
+    };
 
-            if (localStream) {
-                localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
+    pc.ontrack = e => {
+        log("🎬 Flux matériel reçu de : " + target);
+        
+        if (target === 'paris') {
+            const rv = document.getElementById('remoteVideo');
+            
+            // On branche le flux
+            if (rv.srcObject !== e.streams[0]) {
+                rv.srcObject = e.streams[0];
             }
 
-            return pc;
+            // FORCE L'AFFICHAGE : Très important
+            rv.play().then(() => {
+                log("✅ AFFICHAGE ACTIF : " + target);
+            }).catch(err => {
+                log("⚠️ Blocage navigateur : CLIQUEZ SUR LA PAGE pour voir Paris");
+                // On débloque au premier clic sur le document
+                document.onclick = () => {
+                    rv.play();
+                    log("🔊 Audio/Vidéo débloqués par clic");
+                };
+            });
         }
+    };
+
+    if (localStream) {
+        localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
+    }
+
+    return pc;
+}
 
         // 4. Lancer l'appel
         document.getElementById('startCall').onclick = async () => {
