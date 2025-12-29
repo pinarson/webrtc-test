@@ -2,7 +2,7 @@
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
-    <title>Console NANTES - Émetteur</title>
+    <title>Console NANTES - Dashboard Pro</title>
     <style>
         body { background: #0f0f0f; color: #eee; font-family: 'Segoe UI', sans-serif; text-align: center; padding: 20px; margin: 0; }
         
@@ -14,6 +14,12 @@
         .offline { border-left-color: #ff3333; }
         .stat-label { font-size: 10px; color: #888; text-transform: uppercase; letter-spacing: 1px; }
         .stat-value { font-size: 14px; font-weight: bold; margin-top: 4px; }
+
+        /* Device Selectors */
+        .selectors { background: #1e1e1e; padding: 15px; border-radius: 12px; margin-bottom: 20px; display: inline-flex; gap: 20px; border: 1px solid #333; }
+        .select-group { text-align: left; }
+        label { display: block; font-size: 10px; color: #888; margin-bottom: 5px; text-transform: uppercase; }
+        select { background: #333; color: white; border: 1px solid #444; padding: 8px; border-radius: 5px; min-width: 200px; outline: none; }
 
         video { width: 80%; max-width: 900px; border: 2px solid #333; border-radius: 12px; background: black; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
         
@@ -38,6 +44,18 @@
         </div>
     </div>
 
+    <div class="selectors">
+        <div class="select-group">
+            <label>Source Vidéo</label>
+            <select id="videoSource"></select>
+        </div>
+        <div class="select-group">
+            <label>Microphone</label>
+            <select id="audioSource"></select>
+        </div>
+    </div>
+
+    <br>
     <video id="localVideo" autoplay playsinline muted></video>
     
     <div class="controls">
@@ -61,64 +79,97 @@
             }
         };
 
+        const videoSelect = document.querySelector('select#videoSource');
+        const audioSelect = document.querySelector('select#audioSource');
         const sig = new WebSocket('wss://railway-webrtc-production.up.railway.app');
         const config = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
         let localStream;
         let pc;
         let watchdogTimer = null;
 
-        // Capture 1080p
-        navigator.mediaDevices.getUserMedia({ 
-            video: { width: 1920, height: 1080 }, 
-            audio: true 
-        }).then(stream => {
-            localStream = stream;
-            document.getElementById('localVideo').srcObject = stream;
-            log("Caméra 1080p prête.");
-        });
+        // --- LISTER LES PÉRIPHÉRIQUES ---
+        async function getDevices() {
+            const devices = await navigator.mediaDevices.enumerateDevices();
+            videoSelect.innerHTML = '';
+            audioSelect.innerHTML = '';
+            devices.forEach(device => {
+                const option = document.createElement('option');
+                option.value = device.deviceId;
+                if (device.kind === 'videoinput') {
+                    option.text = device.label || `Caméra ${videoSelect.length + 1}`;
+                    videoSelect.appendChild(option);
+                } else if (device.kind === 'audioinput') {
+                    option.text = device.label || `Micro ${audioSelect.length + 1}`;
+                    audioSelect.appendChild(option);
+                }
+            });
+        }
+
+        // --- CAPTURE DES SOURCES CHOISIES ---
+        async function startCapture() {
+            if (localStream) {
+                localStream.getTracks().forEach(track => track.stop());
+            }
+            const videoSource = videoSelect.value;
+            const audioSource = audioSelect.value;
+            const constraints = {
+                video: { deviceId: videoSource ? { exact: videoSource } : undefined, width: 1920, height: 1080 },
+                audio: { deviceId: audioSource ? { exact: audioSource } : undefined }
+            };
+            try {
+                localStream = await navigator.mediaDevices.getUserMedia(constraints);
+                document.getElementById('localVideo').srcObject = localStream;
+                log("Flux média mis à jour.");
+                
+                // Si on est déjà en live, on remplace la piste
+                if (pc) {
+                    const videoTrack = localStream.getVideoTracks()[0];
+                    const audioTrack = localStream.getAudioTracks()[0];
+                    const videoSender = pc.getSenders().find(s => s.track.kind === 'video');
+                    const audioSender = pc.getSenders().find(s => s.track.kind === 'audio');
+                    if (videoSender) videoSender.replaceTrack(videoTrack);
+                    if (audioSender) audioSender.replaceTrack(audioTrack);
+                    log("Pistes WebRTC remplacées à chaud.");
+                }
+            } catch (e) {
+                log("Erreur capture : " + e.message);
+            }
+        }
+
+        // Initialisation
+        navigator.mediaDevices.getUserMedia({ audio: true, video: true })
+            .then(() => getDevices().then(startCapture))
+            .catch(e => log("Permission refusée."));
+
+        videoSelect.onchange = startCapture;
+        audioSelect.onchange = startCapture;
 
         sig.onopen = () => {
             sig.send(JSON.stringify({ type: 'login', name: 'nantes' }));
             updateUI('server', 'online', 'Connecté');
-            log("Login réussi sur Railway.");
+            log("Login Railway OK.");
         };
 
-        sig.onclose = () => {
-            updateUI('server', 'offline', 'Serveur perdu');
-            log("Connexion au serveur perdue.");
-        };
-
-        // --- FONCTION DE STREAMING (Auto-Healing incluse) ---
+        // --- FONCTION DE STREAMING ---
         async function startStreaming() {
-            log("🔄 Démarrage de la négociation...");
+            log("🔄 Lancement WebRTC...");
             updateUI('webrtc', 'pending', 'Négociation...');
-            
-            // Si une ancienne connexion existe, on la ferme proprement
-            if (pc) {
-                pc.close();
-            }
+            if (pc) pc.close();
 
             pc = new RTCPeerConnection(config);
             
-            // --- WATCHDOG ---
             pc.onconnectionstatechange = () => {
                 const state = pc.connectionState;
-                log("État WebRTC : " + state);
-                
+                log("État : " + state);
                 if (state === 'connected') {
                     updateUI('webrtc', 'online', 'Flux Actif');
-                    // Reset du timer de relance si on est bien connecté
                     clearTimeout(watchdogTimer);
                     watchdogTimer = null;
-                } 
-                else if (state === 'failed' || state === 'disconnected') {
+                } else if (state === 'failed' || state === 'disconnected') {
                     updateUI('webrtc', 'offline', 'Lien Perdu');
-                    
-                    // Si on n'est pas déjà en train de compter les 5s, on lance la relance
                     if (!watchdogTimer) {
-                        log("⚠️ Alerte : Lien perdu. Tentative de relance automatique dans 5s...");
                         watchdogTimer = setTimeout(() => {
-                            log("🔄 Watchdog : Relance automatique en cours...");
+                            log("🔄 Auto-Healing...");
                             startStreaming();
                             watchdogTimer = null;
                         }, 5000);
@@ -137,20 +188,15 @@
             sig.send(JSON.stringify({ type: 'offer', target: 'obs_paris', offer: offer, from: 'nantes' }));
         }
 
-        // Liaison du bouton
         document.getElementById('startBtn').onclick = startStreaming;
-            
-        // Gestion des messages entrants
+
         sig.onmessage = async (msg) => {
             const data = JSON.parse(msg.data);
-            
-            // On vérifie que pc existe avant d'appliquer la réponse
             if (data.type === 'answer' && pc) {
-                log("Réponse reçue de Paris.");
                 await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
             }
             if (data.type === 'candidate' && pc) {
-                await pc.addIceCandidate(new RTCIceCandidate(data.candidate)).catch(e => {});
+                await pc.addIceCandidate(new RTCIceCandidate(data.candidate)).catch(() => {});
             }
         };
     </script>
