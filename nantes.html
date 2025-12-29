@@ -2,61 +2,155 @@
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
-    <title>Console NANTES</title>
+    <title>Console NANTES - Émetteur</title>
     <style>
-        body { background: #111; color: white; font-family: sans-serif; text-align: center; padding: 20px; }
-        video { width: 80%; max-width: 720px; border: 2px solid #007bff; border-radius: 8px; background: black; }
-        .controls { margin-top: 20px; }
-        button { padding: 15px 30px; background: #e91111; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 18px; font-weight: bold; }
-        #status { color: #aaa; margin-top: 10px; }
+        body { background: #0f0f0f; color: #eee; font-family: 'Segoe UI', sans-serif; text-align: center; padding: 20px; margin: 0; }
+        
+        /* Dashboard Stats */
+        .dashboard { display: flex; justify-content: center; gap: 15px; margin-bottom: 25px; }
+        .stat-card { background: #1e1e1e; padding: 12px 20px; border-radius: 8px; border-left: 5px solid #444; min-width: 200px; text-align: left; transition: 0.3s; }
+        .online { border-left-color: #00ff88; box-shadow: 0 0 10px rgba(0, 255, 136, 0.2); }
+        .pending { border-left-color: #ffab00; }
+        .offline { border-left-color: #ff3333; }
+        .stat-label { font-size: 10px; color: #888; text-transform: uppercase; letter-spacing: 1px; }
+        .stat-value { font-size: 14px; font-weight: bold; margin-top: 4px; }
+
+        video { width: 80%; max-width: 900px; border: 2px solid #333; border-radius: 12px; background: black; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+        
+        .controls { margin-top: 25px; }
+        button { padding: 18px 40px; background: #e91111; color: white; border: none; border-radius: 50px; cursor: pointer; font-size: 18px; font-weight: bold; transition: 0.3s; }
+        button:hover { background: #ff4b2b; transform: scale(1.05); }
+        button:disabled { background: #555; cursor: not-allowed; }
+
+        #log-console { max-width: 900px; margin: 25px auto 0; height: 120px; background: #000; color: #00ff88; font-family: monospace; font-size: 12px; padding: 15px; overflow-y: auto; text-align: left; border-radius: 8px; border: 1px solid #333; }
     </style>
 </head>
 <body>
     <h1>📍 CONSOLE NANTES</h1>
+
+    <div class="dashboard">
+        <div id="status-server" class="stat-card offline">
+            <div class="stat-label">Signalisation Railway</div>
+            <div class="stat-value">DÉCONNECTÉ</div>
+        </div>
+        <div id="status-webrtc" class="stat-card offline">
+            <div class="stat-label">Lien WebRTC (Flux)</div>
+            <div class="stat-value">HORS LIGNE</div>
+        </div>
+    </div>
+
     <video id="localVideo" autoplay playsinline muted></video>
     
     <div class="controls">
         <button id="startBtn">🔴 ENVOYER LE FLUX VERS PARIS</button>
-        <p id="status">Statut : Prêt à émettre</p>
     </div>
 
+    <div id="log-console">> Initialisation du système...</div>
+
     <script>
+        const log = (m) => {
+            const c = document.getElementById('log-console');
+            c.innerHTML += `<div>[${new Date().toLocaleTimeString()}] ${m}</div>`;
+            c.scrollTop = c.scrollHeight;
+        };
+
+        const updateUI = (id, state, txt) => {
+            const el = document.getElementById(`status-${id}`);
+            if(el) {
+                el.className = `stat-card ${state}`;
+                el.querySelector('.stat-value').innerText = txt.toUpperCase();
+            }
+        };
+
         const sig = new WebSocket('wss://railway-webrtc-production.up.railway.app');
         const config = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
         let localStream;
+        let pc;
 
-        // Capture HD 1080p
+        // 1. Capture HD 1080p
         navigator.mediaDevices.getUserMedia({ 
             video: { width: 1920, height: 1080 }, 
             audio: true 
         }).then(stream => {
             localStream = stream;
             document.getElementById('localVideo').srcObject = stream;
+            log("Caméra 1080p activée.");
+        }).catch(err => {
+            log("❌ Erreur caméra : " + err);
         });
 
-        sig.onopen = () => sig.send(JSON.stringify({ type: 'login', name: 'nantes' }));
+        // 2. Gestion de la connexion au serveur
+        sig.onopen = () => {
+            sig.send(JSON.stringify({ type: 'login', name: 'nantes' }));
+            updateUI('server', 'online', 'Connecté');
+            log("Connecté au serveur Railway (ID: nantes)");
+        };
 
+        sig.onclose = () => {
+            updateUI('server', 'offline', 'Serveur perdu');
+            log("❌ Connexion serveur perdue.");
+        };
+
+        // 3. Watchdog WebRTC
+        const setupWatchdog = (peer) => {
+            peer.onconnectionstatechange = () => {
+                const state = peer.connectionState;
+                log("État WebRTC : " + state);
+                
+                switch(state) {
+                    case 'connected':
+                        updateUI('webrtc', 'online', 'Flux Transmis');
+                        break;
+                    case 'connecting':
+                        updateUI('webrtc', 'pending', 'Négociation...');
+                        break;
+                    case 'failed':
+                    case 'disconnected':
+                        updateUI('webrtc', 'offline', 'Lien interrompu');
+                        break;
+                }
+            };
+        };
+
+        // 4. Lancement de l'envoi
         document.getElementById('startBtn').onclick = async () => {
-            document.getElementById('status').innerText = "📡 Négociation avec Paris...";
-            const pc = new RTCPeerConnection(config);
+            log("Lancement de la connexion vers obs_paris...");
+            updateUI('webrtc', 'pending', 'Initialisation...');
+
+            pc = new RTCPeerConnection(config);
+            setupWatchdog(pc);
             
             localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
 
             pc.onicecandidate = e => {
-                if (e.candidate) sig.send(JSON.stringify({ type: 'candidate', target: 'obs_paris', candidate: e.candidate }));
+                if (e.candidate) sig.send(JSON.stringify({ 
+                    type: 'candidate', 
+                    target: 'obs_paris', 
+                    candidate: e.candidate 
+                }));
             };
 
             const offer = await pc.createOffer();
             await pc.setLocalDescription(offer);
-            sig.send(JSON.stringify({ type: 'offer', target: 'obs_paris', offer: offer, from: 'nantes' }));
+            sig.send(JSON.stringify({ 
+                type: 'offer', 
+                target: 'obs_paris', 
+                offer: offer, 
+                from: 'nantes' 
+            }));
             
+            // Écoute de la réponse de Paris
             sig.onmessage = async (msg) => {
                 const data = JSON.parse(msg.data);
-                if (data.type === 'answer') {
+                
+                if (data.type === 'answer' && data.from === 'obs_paris') {
+                    log("Réponse reçue d'OBS Paris.");
                     await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
-                    document.getElementById('status').innerText = "✅ FLUX TRANSMIS À PARIS (1080p)";
                 }
-                if (data.type === 'candidate') await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+                
+                if (data.type === 'candidate' && data.from === 'obs_paris') {
+                    await pc.addIceCandidate(new RTCIceCandidate(data.candidate)).catch(e => {});
+                }
             };
         };
     </script>
