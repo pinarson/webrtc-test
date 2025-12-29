@@ -65,6 +65,7 @@
         const config = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
         let localStream;
         let pc;
+        let watchdogTimer = null;
 
         // Capture 1080p
         navigator.mediaDevices.getUserMedia({ 
@@ -87,19 +88,41 @@
             log("Connexion au serveur perdue.");
         };
 
-        document.getElementById('startBtn').onclick = async () => {
-            log("Démarrage de la négociation...");
+        // --- FONCTION DE STREAMING (Auto-Healing incluse) ---
+        async function startStreaming() {
+            log("🔄 Démarrage de la négociation...");
             updateUI('webrtc', 'pending', 'Négociation...');
             
+            // Si une ancienne connexion existe, on la ferme proprement
+            if (pc) {
+                pc.close();
+            }
+
             pc = new RTCPeerConnection(config);
             
             // --- WATCHDOG ---
             pc.onconnectionstatechange = () => {
-                log("État WebRTC : " + pc.connectionState);
-                if (pc.connectionState === 'connected') {
+                const state = pc.connectionState;
+                log("État WebRTC : " + state);
+                
+                if (state === 'connected') {
                     updateUI('webrtc', 'online', 'Flux Actif');
-                } else if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+                    // Reset du timer de relance si on est bien connecté
+                    clearTimeout(watchdogTimer);
+                    watchdogTimer = null;
+                } 
+                else if (state === 'failed' || state === 'disconnected') {
                     updateUI('webrtc', 'offline', 'Lien Perdu');
+                    
+                    // Si on n'est pas déjà en train de compter les 5s, on lance la relance
+                    if (!watchdogTimer) {
+                        log("⚠️ Alerte : Lien perdu. Tentative de relance automatique dans 5s...");
+                        watchdogTimer = setTimeout(() => {
+                            log("🔄 Watchdog : Relance automatique en cours...");
+                            startStreaming();
+                            watchdogTimer = null;
+                        }, 5000);
+                    }
                 }
             };
 
@@ -112,17 +135,23 @@
             const offer = await pc.createOffer();
             await pc.setLocalDescription(offer);
             sig.send(JSON.stringify({ type: 'offer', target: 'obs_paris', offer: offer, from: 'nantes' }));
+        }
+
+        // Liaison du bouton
+        document.getElementById('startBtn').onclick = startStreaming;
             
-            sig.onmessage = async (msg) => {
-                const data = JSON.parse(msg.data);
-                if (data.type === 'answer') {
-                    log("Réponse reçue de Paris.");
-                    await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
-                }
-                if (data.type === 'candidate') {
-                    await pc.addIceCandidate(new RTCIceCandidate(data.candidate)).catch(e => {});
-                }
-            };
+        // Gestion des messages entrants
+        sig.onmessage = async (msg) => {
+            const data = JSON.parse(msg.data);
+            
+            // On vérifie que pc existe avant d'appliquer la réponse
+            if (data.type === 'answer' && pc) {
+                log("Réponse reçue de Paris.");
+                await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+            }
+            if (data.type === 'candidate' && pc) {
+                await pc.addIceCandidate(new RTCIceCandidate(data.candidate)).catch(e => {});
+            }
         };
     </script>
 </body>
