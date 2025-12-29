@@ -2,41 +2,32 @@
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
-    <title>Console PARIS - Dashboard</title>
+    <title>Console Paris - Dashboard Pro</title>
     <style>
         body { background: #0f0f0f; color: #eee; font-family: 'Segoe UI', sans-serif; text-align: center; padding: 20px; margin: 0; }
-        h1 { margin-bottom: 10px; color: #00d4ff; }
-
-        /* SÉLECTEURS SOUS LE TITRE */
-        .selectors { 
-            background: #1e1e1e; padding: 12px 20px; border-radius: 50px; 
-            margin: 0 auto 25px auto; display: inline-flex; gap: 25px; 
-            border: 1px solid #333; align-items: center;
-        }
-        .select-group { text-align: left; display: flex; align-items: center; gap: 10px; }
-        label { font-size: 10px; color: #888; text-transform: uppercase; letter-spacing: 1px; white-space: nowrap; }
-        select { 
-            background: #000; color: #00d4ff; border: 1px solid #444; 
-            padding: 6px 12px; border-radius: 20px; min-width: 180px; 
-            outline: none; font-size: 12px; cursor: pointer;
-        }
-
+        
         /* Dashboard Stats */
         .dashboard { display: flex; justify-content: center; gap: 15px; margin-bottom: 25px; }
-        .stat-card { background: #1e1e1e; padding: 12px 20px; border-radius: 8px; border-left: 5px solid #444; min-width: 180px; text-align: left; transition: 0.3s; }
-        .online { border-left-color: #00d4ff; box-shadow: 0 0 10px rgba(0, 212, 255, 0.2); }
+        .stat-card { background: #1e1e1e; padding: 12px 20px; border-radius: 8px; border-left: 5px solid #444; min-width: 200px; text-align: left; transition: 0.3s; }
+        .online { border-left-color: #00ff88; box-shadow: 0 0 10px rgba(0, 255, 136, 0.2); }
         .pending { border-left-color: #ffab00; }
         .offline { border-left-color: #ff3333; }
-        .stat-label { font-size: 10px; color: #888; text-transform: uppercase; }
+        .stat-label { font-size: 10px; color: #888; text-transform: uppercase; letter-spacing: 1px; }
         .stat-value { font-size: 14px; font-weight: bold; margin-top: 4px; }
+
+        /* Device Selectors */
+        .selectors { background: #1e1e1e; padding: 15px; border-radius: 12px; margin-bottom: 20px; display: inline-flex; gap: 20px; border: 1px solid #333; }
+        .select-group { text-align: left; }
+        label { display: block; font-size: 10px; color: #888; margin-bottom: 5px; text-transform: uppercase; }
+        select { background: #333; color: white; border: 1px solid #444; padding: 8px; border-radius: 5px; min-width: 200px; outline: none; }
 
         video { width: 80%; max-width: 900px; border: 2px solid #333; border-radius: 12px; background: black; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
         
         .controls { margin-top: 25px; }
-        button { padding: 18px 40px; background: #00d4ff; color: #111; border: none; border-radius: 50px; cursor: pointer; font-size: 18px; font-weight: bold; transition: 0.3s; }
-        button:hover { background: #00b8e6; transform: scale(1.05); }
+        button { padding: 18px 40px; background: #e91111; color: white; border: none; border-radius: 50px; cursor: pointer; font-size: 18px; font-weight: bold; transition: 0.3s; }
+        button:hover { background: #ff4b2b; transform: scale(1.05); }
 
-        #log-console { max-width: 900px; margin: 25px auto 0; height: 100px; background: #000; color: #00d4ff; font-family: monospace; font-size: 11px; padding: 15px; overflow-y: auto; text-align: left; border-radius: 8px; border: 1px solid #333; }
+        #log-console { max-width: 900px; margin: 25px auto 0; height: 120px; background: #000; color: #00ff88; font-family: monospace; font-size: 12px; padding: 15px; overflow-y: auto; text-align: left; border-radius: 8px; border: 1px solid #333; }
     </style>
 </head>
 <body>
@@ -44,14 +35,15 @@
 
     <div class="selectors">
         <div class="select-group">
-            <label>Vidéo</label>
+            <label>Source Vidéo</label>
             <select id="videoSource"></select>
         </div>
         <div class="select-group">
-            <label>Micro</label>
+            <label>Microphone</label>
             <select id="audioSource"></select>
         </div>
     </div>
+
 
     <div class="dashboard">
         <div id="status-server" class="stat-card offline">
@@ -64,13 +56,15 @@
         </div>
     </div>
 
+
+    <br>
     <video id="localVideo" autoplay playsinline muted></video>
     
     <div class="controls">
-        <button id="startBtn">🔴 ENVOYER LE FLUX VERS RECEIVER_TO_PARIS</button>
+        <button id="startBtn">🔴 ENVOYER LE FLUX VERS NANTES</button>
     </div>
 
-    <div id="log-console">> Prêt à Paris...</div>
+    <div id="log-console">> Initialisation du système...</div>
 
     <script>
         const log = (m) => {
@@ -91,12 +85,15 @@
         const audioSelect = document.querySelector('select#audioSource');
         const sig = new WebSocket('wss://railway-webrtc-production.up.railway.app');
         const config = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
-        let localStream, pc, watchdogTimer = null;
+        let localStream;
+        let pc;
+        let watchdogTimer = null;
 
-        // --- GESTION DES SOURCES ---
+        // --- LISTER LES PÉRIPHÉRIQUES ---
         async function getDevices() {
             const devices = await navigator.mediaDevices.enumerateDevices();
-            videoSelect.innerHTML = ''; audioSelect.innerHTML = '';
+            videoSelect.innerHTML = '';
+            audioSelect.innerHTML = '';
             devices.forEach(device => {
                 const option = document.createElement('option');
                 option.value = device.deviceId;
@@ -110,51 +107,71 @@
             });
         }
 
+        // --- CAPTURE DES SOURCES CHOISIES ---
         async function startCapture() {
-            if (localStream) localStream.getTracks().forEach(t => t.stop());
+            if (localStream) {
+                localStream.getTracks().forEach(track => track.stop());
+            }
+            const videoSource = videoSelect.value;
+            const audioSource = audioSelect.value;
             const constraints = {
-                video: { deviceId: videoSelect.value ? { exact: videoSelect.value } : undefined, width: 1920, height: 1080 },
-                audio: { deviceId: audioSelect.value ? { exact: audioSelect.value } : undefined }
+                video: { deviceId: videoSource ? { exact: videoSource } : undefined, width: 1920, height: 1080 },
+                audio: { deviceId: audioSource ? { exact: audioSource } : undefined }
             };
             try {
                 localStream = await navigator.mediaDevices.getUserMedia(constraints);
                 document.getElementById('localVideo').srcObject = localStream;
+                log("Flux média mis à jour.");
+                
+                // Si on est déjà en live, on remplace la piste
                 if (pc) {
-                    const vTrack = localStream.getVideoTracks()[0];
-                    const aTrack = localStream.getAudioTracks()[0];
-                    pc.getSenders().find(s => s.track.kind === 'video').replaceTrack(vTrack);
-                    pc.getSenders().find(s => s.track.kind === 'audio').replaceTrack(aTrack);
-                    log("Switch de source réussi.");
+                    const videoTrack = localStream.getVideoTracks()[0];
+                    const audioTrack = localStream.getAudioTracks()[0];
+                    const videoSender = pc.getSenders().find(s => s.track.kind === 'video');
+                    const audioSender = pc.getSenders().find(s => s.track.kind === 'audio');
+                    if (videoSender) videoSender.replaceTrack(videoTrack);
+                    if (audioSender) audioSender.replaceTrack(audioTrack);
+                    log("Pistes WebRTC remplacées à chaud.");
                 }
-            } catch (e) { log("Erreur : " + e.message); }
+            } catch (e) {
+                log("Erreur capture : " + e.message);
+            }
         }
 
-        navigator.mediaDevices.getUserMedia({ audio: true, video: true }).then(() => getDevices().then(startCapture));
+        // Initialisation
+        navigator.mediaDevices.getUserMedia({ audio: true, video: true })
+            .then(() => getDevices().then(startCapture))
+            .catch(e => log("Permission refusée."));
+
         videoSelect.onchange = startCapture;
         audioSelect.onchange = startCapture;
 
         sig.onopen = () => {
             sig.send(JSON.stringify({ type: 'login', name: 'paris' }));
             updateUI('server', 'online', 'Connecté');
-            log("Railway : Paris identifié.");
+            log("Login Railway OK.");
         };
 
-        // --- ENVOI VERS RECEIVER_TO_PARIS ---
+        // --- FONCTION DE STREAMING ---
         async function startStreaming() {
-            log("🔄 WebRTC : Négociation avec le récepteur...");
-            updateUI('webrtc', 'pending', 'En cours...');
+            log("🔄 Lancement WebRTC...");
+            updateUI('webrtc', 'pending', 'Négociation...');
             if (pc) pc.close();
+
             pc = new RTCPeerConnection(config);
             
             pc.onconnectionstatechange = () => {
-                if (pc.connectionState === 'connected') {
+                const state = pc.connectionState;
+                log("État : " + state);
+                if (state === 'connected') {
                     updateUI('webrtc', 'online', 'Flux Actif');
-                    clearTimeout(watchdogTimer); watchdogTimer = null;
-                } else if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+                    clearTimeout(watchdogTimer);
+                    watchdogTimer = null;
+                } else if (state === 'failed' || state === 'disconnected') {
                     updateUI('webrtc', 'offline', 'Lien Perdu');
                     if (!watchdogTimer) {
                         watchdogTimer = setTimeout(() => {
-                            log("🔄 Auto-Healing : Relance...");
+                            log("🔄 Auto-Healing...");
                             startStreaming();
                             watchdogTimer = null;
                         }, 5000);
@@ -162,20 +179,27 @@
                 }
             };
 
-            localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
-            pc.onicecandidate = e => e.candidate && sig.send(JSON.stringify({ type: 'candidate', target: 'obs_paris', candidate: e.candidate }));
-            
+            localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+
+            pc.onicecandidate = e => {
+                if (e.candidate) sig.send(JSON.stringify({ type: 'candidate', target: 'obs_nantes', candidate: e.candidate }));
+            };
+
             const offer = await pc.createOffer();
             await pc.setLocalDescription(offer);
-            // On envoie à "obs_paris" qui est le nom écouté par receiver_to_paris.html
-            sig.send(JSON.stringify({ type: 'offer', target: 'obs_paris', offer, from: 'paris' }));
+            sig.send(JSON.stringify({ type: 'offer', target: 'obs_nantes', offer: offer, from: 'paris' }));
         }
 
         document.getElementById('startBtn').onclick = startStreaming;
-        sig.onmessage = async (m) => {
-            const d = JSON.parse(m.data);
-            if (d.type === 'answer' && pc) await pc.setRemoteDescription(new RTCSessionDescription(d.answer));
-            if (d.type === 'candidate' && pc) await pc.addIceCandidate(new RTCIceCandidate(d.candidate)).catch(()=>{});
+
+        sig.onmessage = async (msg) => {
+            const data = JSON.parse(msg.data);
+            if (data.type === 'answer' && pc) {
+                await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+            }
+            if (data.type === 'candidate' && pc) {
+                await pc.addIceCandidate(new RTCIceCandidate(data.candidate)).catch(() => {});
+            }
         };
     </script>
 </body>
