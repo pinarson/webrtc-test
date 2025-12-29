@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <title>Console PARIS - Dashboard & Sources</title>
+    <style>
+        body { background: #0f0f0f; color: #eee; font-family: 'Segoe UI', sans-serif; text-align: center; padding: 20px; margin: 0; }
+        
+        h1 { margin-bottom: 10px; color: #00d4ff; }
+
+        /* SÉLECTEURS POSITIONNÉS SOUS LE TITRE */
+        .selectors { 
+            background: #1e1e1e; 
+            padding: 12px 20px; 
+            border-radius: 50px; 
+            margin: 0 auto 25px auto; 
+            display: inline-flex; 
+            gap: 25px; 
+            border: 1px solid #333;
+            align-items: center;
+        }
+        .select-group { text-align: left; display: flex; align-items: center; gap: 10px; }
+        label { font-size: 10px; color: #888; text-transform: uppercase; letter-spacing: 1px; white-space: nowrap; }
+        select { 
+            background: #000; 
+            color: #00d4ff; 
+            border: 1px solid #444; 
+            padding: 6px 12px; 
+            border-radius: 20px; 
+            min-width: 180px; 
+            outline: none; 
+            font-size: 12px;
+            cursor: pointer;
+        }
+
+        /* Dashboard Stats */
+        .dashboard { display: flex; justify-content: center; gap: 15px; margin-bottom: 25px; }
+        .stat-card { background: #1e1e1e; padding: 12px 20px; border-radius: 8px; border-left: 5px solid #444; min-width: 180px; text-align: left; transition: 0.3s; }
+        .online { border-left-color: #00d4ff; box-shadow: 0 0 10px rgba(0, 212, 255, 0.2); }
+        .pending { border-left-color: #ffab00; }
+        .offline { border-left-color: #ff3333; }
+        .stat-label { font-size: 10px; color: #888; text-transform: uppercase; }
+        .stat-value { font-size: 13px; font-weight: bold; margin-top: 4px; }
+
+        video { width: 80%; max-width: 800px; border: 2px solid #333; border-radius: 12px; background: black; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+        
+        .controls { margin-top: 25px; }
+        button { padding: 18px 40px; background: #00d4ff; color: #111; border: none; border-radius: 50px; cursor: pointer; font-size: 18px; font-weight: bold; transition: 0.3s; }
+        button:hover { background: #00b8e6; transform: scale(1.05); }
+
+        #log-console { max-width: 800px; margin: 25px auto 0; height: 100px; background: #000; color: #00d4ff; font-family: monospace; font-size: 11px; padding: 15px; overflow-y: auto; text-align: left; border-radius: 8px; border: 1px solid #333; }
+    </style>
+</head>
+<body>
+    <h1>📍 CONSOLE PARIS</h1>
+
+    <div class="selectors">
+        <div class="select-group">
+            <label>Vidéo</label>
+            <select id="videoSource"></select>
+        </div>
+        <div class="select-group">
+            <label>Micro</label>
+            <select id="audioSource"></select>
+        </div>
+    </div>
+
+    <div class="dashboard">
+        <div id="status-server" class="stat-card offline">
+            <div class="stat-label">Signalisation</div>
+            <div class="stat-value">DÉCONNECTÉ</div>
+        </div>
+        <div id="status-nantes" class="stat-card offline">
+            <div class="stat-label">Vers Régie Nantes</div>
+            <div class="stat-value">HORS LIGNE</div>
+        </div>
+        <div id="status-obs_nantes" class="stat-card offline">
+            <div class="stat-label">Vers OBS Nantes</div>
+            <div class="stat-value">HORS LIGNE</div>
+        </div>
+    </div>
+
+    <video id="localVideo" autoplay playsinline muted></video>
+    
+    <div class="controls">
+        <button id="startBtn">🔴 ENVOYER VERS NANTES</button>
+    </div>
+
+    <div id="log-console">> Initialisation Paris...</div>
+
+    <script>
+        const log = (m) => {
+            const c = document.getElementById('log-console');
+            c.innerHTML += `<div>[${new Date().toLocaleTimeString()}] ${m}</div>`;
+            c.scrollTop = c.scrollHeight;
+        };
+
+        const updateUI = (id, state, txt) => {
+            const el = document.getElementById(`status-${id}`);
+            if(el) {
+                el.className = `stat-card ${state}`;
+                el.querySelector('.stat-value').innerText = txt.toUpperCase();
+            }
+        };
+
+        const videoSelect = document.querySelector('select#videoSource');
+        const audioSelect = document.querySelector('select#audioSource');
+        const sig = new WebSocket('wss://railway-webrtc-production.up.railway.app');
+        const config = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+        let localStream, pcs = {}, watchdogTimers = {};
+
+        // --- GESTION DES PÉRIPHÉRIQUES ---
+        async function getDevices() {
+            const devices = await navigator.mediaDevices.enumerateDevices();
+            videoSelect.innerHTML = ''; audioSelect.innerHTML = '';
+            devices.forEach(device => {
+                const option = document.createElement('option');
+                option.value = device.deviceId;
+                if (device.kind === 'videoinput') {
+                    option.text = device.label || `Caméra ${videoSelect.length + 1}`;
+                    videoSelect.appendChild(option);
+                } else if (device.kind === 'audioinput') {
+                    option.text = device.label || `Micro ${audioSelect.length + 1}`;
+                    audioSelect.appendChild(option);
+                }
+            });
+        }
+
+        async function startCapture() {
+            if (localStream) localStream.getTracks().forEach(t => t.stop());
+            const constraints = {
+                video: { deviceId: videoSelect.value ? { exact: videoSelect.value } : undefined, width: 1280, height: 720 },
+                audio: { deviceId: audioSelect.value ? { exact: audioSelect.value } : undefined }
+            };
+            try {
+                localStream = await navigator.mediaDevices.getUserMedia(constraints);
+                document.getElementById('localVideo').srcObject = localStream;
+                log("Sources Paris mises à jour.");
+                
+                // Switch à chaud pour tous les PeerConnections actifs
+                Object.values(pcs).forEach(pc => {
+                    const vTrack = localStream.getVideoTracks()[0];
+                    const aTrack = localStream.getAudioTracks()[0];
+                    const vSender = pc.getSenders().find(s => s.track && s.track.kind === 'video');
+                    const aSender = pc.getSenders().find(s => s.track && s.track.kind === 'audio');
+                    if (vSender) vSender.replaceTrack(vTrack);
+                    if (aSender) aSender.replaceTrack(aTrack);
+                });
+            } catch (e) { log("Erreur capture : " + e.message); }
+        }
+
+        // Initialisation périphériques
+        navigator.mediaDevices.getUserMedia({ audio: true, video: true })
+            .then(() => getDevices().then(startCapture));
+
+        videoSelect.onchange = startCapture;
+        audioSelect.onchange = startCapture;
+
+        sig.onopen = () => {
+            sig.send(JSON.stringify({ type: 'login', name: 'paris' }));
+            updateUI('server', 'online', 'Connecté');
+            log("Signalisation Paris OK.");
+        };
+
+        // --- LOGIQUE D'APPEL AVEC WATCHDOG ---
+        async function startCall(target) {
+            log(`🔄 Appel de ${target}...`);
+            updateUI(target, 'pending', 'Appel...');
+            if (pcs[target]) pcs[target].close();
+
+            const pc = new RTCPeerConnection(config);
+            pcs[target] = pc;
+
+            pc.onconnectionstatechange = () => {
+                const state = pc.connectionState;
+                log(`Statut ${target}: ${state}`);
+                if (state === 'connected') {
+                    updateUI(target, 'online', 'Actif');
+                    clearTimeout(watchdogTimers[target]); watchdogTimers[target] = null;
+                } else if (state === 'failed' || state === 'disconnected') {
+                    updateUI(target, 'offline', 'Perdu');
+                    if (!watchdogTimers[target]) {
+                        log(`⚠️ Relance auto de ${target} (5s)`);
+                        watchdogTimers[target] = setTimeout(() => {
+                            startCall(target); watchdogTimers[target] = null;
+                        }, 5000);
+                    }
+                }
+            };
+
+            localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
+            pc.onicecandidate = e => e.candidate && sig.send(JSON.stringify({ type: 'candidate', target: target, candidate: e.candidate }));
+            
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            sig.send(JSON.stringify({ type: 'offer', target: target, offer, from: 'paris' }));
+        }
+
+        document.getElementById('startBtn').onclick = () => {
+            startCall('nantes');
+            startCall('obs_nantes');
+        };
+
+        sig.onmessage = async (m) => {
+            const d = JSON.parse(m.data);
+            const pc = pcs[d.from];
+            if (pc && d.type === 'answer') await pc.setRemoteDescription(new RTCSessionDescription(d.answer));
+            if (pc && d.type === 'candidate') await pc.addIceCandidate(new RTCIceCandidate(d.candidate)).catch(()=>{});
+        };
+    </script>
+</body>
+</html>
