@@ -1,18 +1,16 @@
 // --- 0. VARIABLES GLOBALES ---
 const videoSelect = document.querySelector('select#videoSource');
+const audioSelect = document.querySelector('select#audioSource'); // Ajout micro
 const localVideo = document.getElementById('localVideo');
 const remoteVideo = document.getElementById('remoteVideo');
 const titleElement = document.getElementById('title');
 
 let localStream;
 let peerConnections = {}; 
+let watchdogTimers = {}; // Pour la relance auto
 
 const configuration = { 
-    iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' },
-        { urls: 'stun:stun2.l.google.com:19302' }
-    ] 
+    iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' }] 
 };
 
 const signaling = new WebSocket('wss://railway-webrtc-production.up.railway.app');
@@ -33,16 +31,21 @@ function initPage() {
     }
 }
 
-// --- 2. CAPTURE VIDÉO ---
+// --- 2. CAPTURE VIDÉO & AUDIO ---
 async function getDevices() {
     const devices = await navigator.mediaDevices.enumerateDevices();
-    videoSelect.innerHTML = '';
+    if (videoSelect) videoSelect.innerHTML = '';
+    if (audioSelect) audioSelect.innerHTML = '';
+
     devices.forEach(device => {
-        if (device.kind === 'videoinput') {
-            const option = document.createElement('option');
-            option.value = device.deviceId;
+        const option = document.createElement('option');
+        option.value = device.deviceId;
+        if (device.kind === 'videoinput' && videoSelect) {
             option.text = device.label || `Caméra ${videoSelect.length + 1}`;
             videoSelect.appendChild(option);
+        } else if (device.kind === 'audioinput' && audioSelect) {
+            option.text = device.label || `Micro ${audioSelect.length + 1}`;
+            audioSelect.appendChild(option);
         }
     });
 }
@@ -52,23 +55,29 @@ async function startStream() {
     
     const constraints = {
         video: { 
-            deviceId: videoSelect.value ? { exact: videoSelect.value } : undefined, 
-            width: { ideal: 1280 }, 
-            height: { ideal: 720 } 
+            deviceId: videoSelect?.value ? { exact: videoSelect.value } : undefined, 
+            width: { ideal: 1920 }, height: { ideal: 1080 } 
         },
-        audio: true
+        audio: { deviceId: audioSelect?.value ? { exact: audioSelect.value } : undefined }
     };
 
     try {
         localStream = await navigator.mediaDevices.getUserMedia(constraints);
         localVideo.srcObject = localStream;
-        console.log("✅ Caméra chargée");
-    } catch (e) { 
-        console.error("❌ Erreur caméra:", e); 
-    }
+        console.log("✅ Caméra & Micro chargés");
+
+        // Switch à chaud si déjà connecté
+        Object.values(peerConnections).forEach(pc => {
+            localStream.getTracks().forEach(track => {
+                const sender = pc.getSenders().find(s => s.track.kind === track.kind);
+                if (sender) sender.replaceTrack(track);
+            });
+        });
+    } catch (e) { console.error("❌ Erreur média:", e); }
 }
 
-videoSelect.onchange = startStream;
+if (videoSelect) videoSelect.onchange = startStream;
+if (audioSelect) audioSelect.onchange = startStream;
 
 // --- 3. SIGNALISATION ---
 signaling.onopen = () => {
@@ -81,18 +90,37 @@ signaling.onmessage = async (message) => {
     let pc = peerConnections[data.from];
 
     if (data.type === 'offer') {
+        console.log("📩 Offre reçue de :", data.from);
         await handleOffer(data.offer, data.from);
     } else if (data.type === 'answer') {
         if (pc) await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
     } else if (data.type === 'candidate') {
-        if (pc) await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+        if (pc && pc.remoteDescription) await pc.addIceCandidate(new RTCIceCandidate(data.candidate)).catch(e => {});
     }
 };
 
-// --- 4. LOGIQUE WEBRTC ---
+// --- 4. LOGIQUE WEBRTC AVEC WATCHDOG ---
 function createPeerConnection(target) {
+    if (peerConnections[target]) peerConnections[target].close();
+
     const pc = new RTCPeerConnection(configuration);
     
+    // WATCHDOG : Relance si déco > 5s
+    pc.onconnectionstatechange = () => {
+        console.log(`Statut [${target}]: ${pc.connectionState}`);
+        if (pc.connectionState === 'connected') {
+            clearTimeout(watchdogTimers[target]);
+            watchdogTimers[target] = null;
+        } else if (['failed', 'disconnected'].includes(pc.connectionState)) {
+            if (!watchdogTimers[target]) {
+                watchdogTimers[target] = setTimeout(() => {
+                    console.log(`🔄 Relance auto vers ${target}...`);
+                    document.getElementById('startCall').click();
+                }, 5000);
+            }
+        }
+    };
+
     pc.onicecandidate = (event) => {
         if (event.candidate) {
             signaling.send(JSON.stringify({ type: 'candidate', target: target, candidate: event.candidate }));
@@ -100,10 +128,13 @@ function createPeerConnection(target) {
     };
 
     pc.ontrack = (event) => {
-        if (remoteVideo) remoteVideo.srcObject = event.streams[0];
+        console.log("🎬 Flux reçu de :", target);
+        if (remoteVideo) {
+            remoteVideo.srcObject = event.streams[0];
+            remoteVideo.play().catch(e => console.warn("Attente interaction utilisateur pour le son"));
+        }
     };
 
-    // On ajoute les pistes seulement si elles existent
     if (localStream) {
         localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
     }
@@ -112,32 +143,22 @@ function createPeerConnection(target) {
     return pc;
 }
 
-// --- 5. BOUTON LANCER LE DIRECT ---
+// --- 5. DIFFUSION ---
 document.getElementById('startCall').onclick = async () => {
     if (signaling.readyState !== WebSocket.OPEN) return;
     if (!localStream) await startStream();
 
-    const targets = [TARGET_ID, 'obs_nantes', 'obs_paris']; 
-    console.log("📢 Diffusion vers :", targets);
-
+    // FILTRE DES CIBLES : On envoie seulement à l'autre et aux récepteurs concernés
+    const targets = [TARGET_ID, 'obs_paris', 'obs_nantes'].filter(id => id !== MY_ID);
+    
     for (const target of targets) {
-        if (target === MY_ID) continue; // Ne pas s'appeler soi-même
-
         try {
             const pc = createPeerConnection(target);
             const offer = await pc.createOffer();
             await pc.setLocalDescription(offer);
-            
-            signaling.send(JSON.stringify({ 
-                type: 'offer', target: target, offer: offer, from: MY_ID 
-            }));
-            
-            console.log("📨 Offre envoyée à : " + target);
-            // Petit délai pour ne pas brusquer le serveur Railway
-            await new Promise(r => setTimeout(r, 300));
-        } catch (err) {
-            console.error("❌ Erreur vers " + target, err);
-        }
+            signaling.send(JSON.stringify({ type: 'offer', target, offer, from: MY_ID }));
+            await new Promise(r => setTimeout(r, 200));
+        } catch (err) { console.error("❌ Erreur vers " + target, err); }
     }
 };
 
@@ -146,10 +167,8 @@ async function handleOffer(offer, from) {
     await pc.setRemoteDescription(new RTCSessionDescription(offer));
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
-    signaling.send(JSON.stringify({ type: 'answer', target: from, answer: answer }));
+    signaling.send(JSON.stringify({ type: 'answer', target: from, answer, from: MY_ID }));
 }
 
-// Lancement
 initPage();
-navigator.mediaDevices.ondevicechange = getDevices;
 getDevices().then(startStream);
