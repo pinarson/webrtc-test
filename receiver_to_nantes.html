@@ -2,42 +2,89 @@
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
-    <title>Receiver NANTES</title>
+    <title>Receiver NANTES (OBS)</title>
     <style>
-        body { margin: 0; background: rgb(0, 0, 0); overflow: hidden; }
+        body { margin: 0; background: rgb(0, 0, 0); overflow: hidden; font-family: sans-serif; }
         video { width: 100vw; height: 100vh; object-fit: contain; }
+        
+        /* Indicateur de statut discret pour le debug dans OBS */
+        #info {
+            position: absolute; top: 10px; left: 10px;
+            background: rgba(0,0,0,0.6); color: #00ff88;
+            padding: 5px 12px; border-radius: 4px; font-size: 11px;
+            z-index: 100; pointer-events: none; border-left: 3px solid #00ff88;
+            transition: opacity 1s;
+        }
     </style>
 </head>
 <body>
-    <video id="v" autoplay playsinline muted></video>
+    <div id="info">📡 ATTENTE SIGNAL PARIS...</div>
+    <video id="v" autoplay playsinline></video>
+
     <script>
+        const info = document.getElementById('info');
+        const videoElement = document.getElementById('v');
         const sig = new WebSocket('wss://railway-webrtc-production.up.railway.app');
         const config = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' }] };
         let pc;
 
-        sig.onopen = () => sig.send(JSON.stringify({ type: 'login', name: 'obs_nantes' }));
+        sig.onopen = () => {
+            sig.send(JSON.stringify({ type: 'login', name: 'obs_nantes' }));
+            info.innerText = "🔌 CONNECTÉ AU SERVEUR (ID: obs_nantes)";
+        };
 
         sig.onmessage = async (msg) => {
             const data = JSON.parse(msg.data);
+            
             if (data.type === 'offer' && data.from === 'paris') {
                 pc = new RTCPeerConnection(config);
                 
-                pc.onicecandidate = e => e.candidate && sig.send(JSON.stringify({ type: 'candidate', target: 'paris', candidate: e.candidate }));
+                pc.onicecandidate = e => {
+                    if (e.candidate) {
+                        sig.send(JSON.stringify({ type: 'candidate', target: 'paris', candidate: e.candidate }));
+                    }
+                };
                 
+                // --- NOUVEAU CODE ONTRACK ---
                 pc.ontrack = e => { 
-                    const videoElement = document.getElementById('v');
+                    console.log("🎬 Flux reçu de Paris");
                     videoElement.srcObject = e.streams[0];
-                    // Sécurité : on s'assure que le volume est au max et on lance la lecture
+                    
+                    // On s'assure que le mute est désactivé côté code
+                    videoElement.muted = false;
                     videoElement.volume = 1.0;
-                    videoElement.play().catch(err => console.log("Attente interaction utilisateur pour l'audio"));
+
+                    // Tentative de lecture forcée
+                    videoElement.play().then(() => {
+                        info.innerText = "🟢 FLUX PARIS ACTIF (SON OK)";
+                        setTimeout(() => info.style.opacity = "0", 5000);
+                    }).catch(err => {
+                        console.warn("🔊 Audio en attente d'interaction");
+                        info.innerText = "⚠️ CLIQUEZ SUR 'INTERAGIR' DANS OBS POUR LE SON";
+                        info.style.color = "#ffab00";
+                        info.style.borderLeftColor = "#ffab00";
+                        
+                        // Si l'utilisateur clique (via l'outil Interagir d'OBS), on active tout
+                        window.onclick = () => {
+                            videoElement.play();
+                            videoElement.muted = false;
+                            info.innerText = "🟢 FLUX PARIS ACTIF (SON OK)";
+                            info.style.color = "#00ff88";
+                            info.style.borderLeftColor = "#00ff88";
+                            setTimeout(() => info.style.opacity = "0", 2000);
+                        };
+                    });
                 };
                 
                 await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
                 const ans = await pc.createAnswer();
                 await pc.setLocalDescription(ans);
                 sig.send(JSON.stringify({ type: 'answer', target: 'paris', answer: ans }));
+
             } else if (data.type === 'candidate' && pc) {
-                await pc.addIceCandidate(new RTCIceCandidate(data.candidate)).catch(e => {});
+                if (pc.remoteDescription) {
+                    await pc.addIceCandidate(new RTCIceCandidate(data.candidate)).catch(e => {});
+                }
             }
         };
     </script>
